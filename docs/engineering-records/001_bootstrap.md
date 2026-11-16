@@ -24,3 +24,7 @@ tags: [bootstrap, setup]
 - **[finding]** The briefs changed four things about earlier milestones: the solver works on packed per-island buffers and never on the world arrays; a beam endpoint is always a node, and a node may ride on a rigid body; generators must emit segment, seam and surface data; and the wake threshold should sit near 25% of yield, below the spec's 30-50%, because a suddenly applied load peaks at about twice its steady value.
 - **[question]** Milestone 4 needs a rigid engine and pod, but rigid bodies arrive in milestone 5. Recommended: move the small "rigid body with anchor nodes" piece to the start of milestone 4. Needs owner approval because it changes the roadmap.
 - **[finding]** Riskiest milestone 1 item is the cantilever check: a point-mass lattice only approximates a textbook beam, and XPBD stiffness depends on substeps, so the tolerance has to be measured, not assumed.
+
+## 2026-11-16 (phase 1.1)
+
+- **[action]** Phase 1.1 done: `Real` (64-bit) and `Vec3` in `real.rs`; flat-array `World` with stable `u32` indices, generation handles, lowest-first slot reuse and `add_force` in `world.rs`; packed single-island buffer with `build_islands` and `copy_back` in `island.rs`. The old per-node struct and `f32` step constant were replaced to follow layout rules 2 and 3. `cargo test` passes (2 tests). No roadmap check is proven yet; the first needs the fixed step (1.2).

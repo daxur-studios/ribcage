@@ -21,7 +21,7 @@ Evidence: [ER 001](/docs/engineering-records/001_bootstrap.md). Design: [spec](/
 
 All in `core/`, headless, no rendering or browser code. The [core layout rules](/docs/research/core-data-layout.md) are binding: read them before phase 1.1. Each phase ends with passing tests and ticks the matching check in the [roadmap](/ROADMAP.md).
 
-- [ ] 1.1 Data layout: 3D nodes and beams in flat arrays, the packed island buffer, and one passing test.
+- [x] 1.1 Data layout: 3D nodes and beams in flat arrays, the packed island buffer, and one passing test.
 - [ ] 1.2 Fixed 60 Hz step with gravity, a state hash, and the "same inputs, same hash" test.
 - [ ] 1.3 XPBD beam solve with damping and a rule-based substep count.
 - [ ] 1.4 Cantilever test against the textbook deflection. Riskiest phase: the tolerance is measured here.
