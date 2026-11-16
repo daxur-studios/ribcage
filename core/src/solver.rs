@@ -10,7 +10,10 @@ use crate::sim::gravity_at;
 use crate::STEP_SECONDS;
 
 /// Substep rule constant: the count is the smallest `n` with `ω_max · h ≤ SUBSTEP_C`.
-/// **[assumption]** `c` near 1, chosen before any measurement. Phase 1.4 measures it.
+/// Measured in phase 1.4: every scene measured stays bounded past `c = 2.5` (the test
+/// truss even at `c = 20`), so `c` is a cost and accuracy dial, not a stability limit. A
+/// settled structure reads softer than exact by about `0.4 · (ω_max · h)²`, so about 40%
+/// at `c = 1`. Kept at 1 (ER 001, phase 1.4).
 pub const SUBSTEP_C: Real = 1.0;
 /// Fewest substeps any island gets.
 pub const MIN_SUBSTEPS: u32 = 4;

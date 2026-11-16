@@ -161,7 +161,7 @@ Both are checked in tension and in compression.
 
 **Substep count.** For each beam, `ω = sqrt(stiffness · (inverse mass a + inverse mass b))`. The island's count is the smallest `n` with `ω_max · h ≤ c`, clamped to a minimum and maximum.
 
-**[assumption]** `c` near 1, minimum 4, maximum 32. The spec also asks the count to depend on current load; that part waits until there is a scene that needs it.
+`c` is 1, minimum 4, maximum 32. **Measured in phase 1.4:** every scene measured stays bounded past `c = 2.5` (the test truss even at one substep, though it then sags 18 times too far), so `c` is not a stability limit. With one pass per substep, a settled structure is softer than the exact one by about `K · (ω_max · h)²`, with `K` between 0.35 and 0.42 on every scene measured (a chain, a flat truss, square trusses 6 to 24 times as long as they are wide). At the rule's count that is about `0.4 · c²`: 40% at `c = 1`, 10% at `c = 0.5` for twice the cost. `c = 1` is kept for now; the minimum and maximum are still **[assumption]**. The spec also asks the count to depend on current load; that part waits until there is a scene that needs it.
 
 **Stiffness scale.** The spec scales all stiffness down by one factor. The factor is whatever keeps the stiffest common beam within the maximum substep count. **[assumption]** It is set once from the benchmark and then left alone, because every tuned value in the game depends on it.
 
@@ -171,8 +171,8 @@ A node-beam lattice is not a textbook beam, so the test compares like with like.
 
 - **Shape:** a long square truss: four lengthwise rails, square frames at regular spacing, a diagonal on every face and across every frame. Length at least ten times the width, so bending dominates.
 - **Expected deflection:** the bending term `P L³ / (3 E I)` with `I` from the four rails (rail area times width squared), plus the shear term from the diagonals. The stiffness used is the scaled one.
-- **Method:** pin one end, hang a load on the other, run with damping until the movement dies away, compare the tip position.
-- **[assumption]** Tolerance 10%. Phase 1.4 measures the real error and how it shrinks as substeps rise, then sets the tolerance from that and records it.
+- **Method:** pin one end, hang a load on the other, settle with a test-side drag force (beam damping zero, since damping adds sag), compare the tip position.
+- **Tolerance (measured in phase 1.4):** the formula is within 2% of the exact truss. With enough substeps (128) the solver settles within 2% of the formula. At the rule's count the solver is softer than exact by `K · (ω_max · h)²` with `K` between 0.38 and 0.46, about 43% at `c = 1`; the test checks that law rather than one percentage. The generator and the numbers are in `core/tests/`.
 
 Build up to it in three steps, each a test: one hanging mass stretches its beam by weight over stiffness (this should be near exact), a hanging chain of ten, then the truss.
 

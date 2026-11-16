@@ -11,11 +11,15 @@ use beam_core::world::{BeamSpec, World};
 use beam_core::{STEP_HZ, STEP_SECONDS};
 use std::fmt::Write as _;
 use std::fs;
+use truss::{apply_tip_load, build, textbook_tip, TrussSpec};
+
+#[path = "../tests/support/truss.rs"]
+mod truss;
 
 const FORMAT_VERSION: u32 = 1;
 
 /// The scenario registry: one name, one command, one set of traces.
-const SCENARIOS: &[&str] = &["hash-split", "brace", "substeps"];
+const SCENARIOS: &[&str] = &["hash-split", "brace", "substeps", "cantilever"];
 
 fn base_scene() -> World {
     let mut w = World::new();
@@ -122,6 +126,9 @@ struct Run<'a> {
     /// "none": the panes are different scenes on purpose; the player skips the comparison.
     compare: &'a str,
     before_step: &'a dyn Fn(&mut World, u32),
+    /// Reference points the player draws in every pane, as `(label, x, y, nodes)`: when
+    /// `nodes` is not empty the player also prints those nodes' mean height next to `y`.
+    marks: Vec<(String, Real, Real, Vec<u32>)>,
 }
 
 fn no_input(_: &mut World, _: u32) {}
@@ -140,12 +147,20 @@ fn record(scenario: &str, run: &Run, mut w: World, every: u32) -> String {
         o,
         "{{\"version\":{FORMAT_VERSION},\"scenario\":\"{scenario}\",\"label\":\"{}\",\"core_commit\":\"{}\",\
 \"step_hz\":{STEP_HZ},\"step_seconds\":{STEP_SECONDS},\"substeps\":{used},\"substep_rule\":\"{rule}\",\
-\"compare\":\"{}\",\"precision\":\"f64\",\"seed\":0,\"units\":\"m,s,kg\",\"keep_every\":{every},\"nodes\":{},\"beams\":[",
+\"compare\":\"{}\",\"precision\":\"f64\",\"seed\":0,\"units\":\"m,s,kg\",\"keep_every\":{every},\"nodes\":{},\"marks\":[",
         run.label,
         commit(),
         run.compare,
         w.node_count()
     );
+    for (k, (label, x, y, nodes)) in run.marks.iter().enumerate() {
+        if k > 0 {
+            o.push(',');
+        }
+        let list: Vec<String> = nodes.iter().map(|n| n.to_string()).collect();
+        let _ = write!(o, "{{\"label\":\"{label}\",\"x\":{x},\"y\":{y},\"nodes\":[{}]}}", list.join(","));
+    }
+    o.push_str("],\"beams\":[");
     for b in 0..w.beam_count() as usize {
         if b > 0 {
             o.push(',');
@@ -209,6 +224,7 @@ fn main() {
         substeps,
         compare,
         before_step,
+        marks: Vec::new(),
     };
     match scenario {
         "hash-split" => {
@@ -239,6 +255,31 @@ fn main() {
             }
             let n = substep_count(&build_islands(&cantilever())[0]);
             out.push((format!("{scenario}-rule"), record(scenario, &run(&format!("rule: {n} substeps"), 240, Substeps::Rule, "none", &no_input), cantilever(), every)));
+        }
+        "cantilever" => {
+            // The phase 1.4 truss (6 m, 0.5 m square section, 200 N on the tip) settling at
+            // fixed 8, 16 and 32 substeps and at the rule's count. Beam damping is zero; a
+            // test-side drag of 10 N·s/m per node settles it, as in the test. The marker is
+            // the textbook tip: the tip frame's centre height minus the formula's deflection.
+            let spec = TrussSpec::standard();
+            let load: &'static dyn Fn(&mut World, u32) = &|w: &mut World, _| {
+                let spec = TrussSpec::standard();
+                apply_tip_load(w, &spec);
+                for i in 0..w.pos.len() {
+                    if w.inv_mass[i] != 0.0 {
+                        let v = w.vel[i];
+                        w.add_force(i as u32, v * -10.0);
+                    }
+                }
+            };
+            let tip_y = 0.5 * spec.width - textbook_tip(&spec);
+            let tips: Vec<u32> = spec.tip_nodes().iter().map(|&t| t as u32).collect();
+            let rule = substep_count(&build_islands(&build(&spec))[0]);
+            for (name, label, n) in [("08", "8 substeps".to_string(), Substeps::Fixed(8)), ("16", "16 substeps".into(), Substeps::Fixed(16)), ("rule", format!("rule: {rule} substeps"), Substeps::Rule), ("32", "32 substeps".into(), Substeps::Fixed(32))] {
+                let mut r = run(&label, 240, n, "none", load);
+                r.marks.push(("textbook tip".into(), spec.length(), tip_y, tips.clone()));
+                out.push((format!("{scenario}-{name}"), record(scenario, &r, build(&spec), every)));
+            }
         }
         _ => unreachable!(),
     }
