@@ -4,6 +4,7 @@
 
 pub mod island;
 pub mod real;
+pub mod sim;
 pub mod world;
 
 use real::Real;

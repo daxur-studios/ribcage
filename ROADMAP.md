@@ -1,6 +1,6 @@
 # ribcage roadmap
 
-**TL;DR.** Overall progress: **2%**. Now: milestone 1 (solver core and tools). First playable slice ends at milestone 4.
+**TL;DR.** Overall progress: **5%**. Now: milestone 1 (solver core and tools). First playable slice ends at milestone 4.
 
 This page is the single answer to "what are we building, and how far along is it?". The design is the [spec](docs/research/node-beam-engine-design-spec.md). The detailed work for the current milestone lives in its plan.
 
@@ -19,7 +19,7 @@ Each milestone has a weight (its share of the whole) and a short list of checks.
 | # | Milestone | Weight | Done | Status |
 | --- | --- | --- | --- | --- |
 | 0 | Scaffold | 2 | 100% | done |
-| 1 | Solver core and tools | 12 | 0% | **now** |
+| 1 | Solver core and tools | 12 | 29% | **now** |
 | 2 | 2D bridge builder | 8 | 0% | next |
 | 3 | 3D on terrain in Three.js | 10 | 0% | |
 | 4 | Parts and assembly (first playable slice) | 12 | 0% | |
@@ -28,7 +28,7 @@ Each milestone has a weight (its share of the whole) and a short list of checks.
 | 7 | Ground and water | 10 | 0% | |
 | 8 | Craft-against-craft collision and threads | 12 | 0% | |
 | 9 | Visual layer | 8 | 0% | |
-| | **Overall** | **100** | **2%** | |
+| | **Overall** | **100** | **5%** | |
 
 ## Who plans and builds what
 
@@ -56,8 +56,8 @@ Planning has two stages. The costly-to-redo milestones (5 and 8) have an early d
 
 ### 1. Solver core and tools ([Plan 001](docs/plans/001_bootstrap.md))
 
-- [ ] Nodes and beams live in flat arrays and step at a fixed 60 Hz.
-- [ ] The same inputs give an identical state hash on every run.
+- [x] Nodes and beams live in flat arrays and step at a fixed 60 Hz.
+- [x] The same inputs give an identical state hash on every run.
 - [ ] A cantilever's tip deflection matches the textbook formula within a stated tolerance.
 - [ ] A beam loaded below yield returns to rest; past yield it stays bent; past break it is removed and reports an event.
 - [ ] A resting structure gains no energy over ten simulated minutes.

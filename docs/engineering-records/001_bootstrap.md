@@ -28,3 +28,4 @@ tags: [bootstrap, setup]
 ## 2026-11-16 (phase 1.1)
 
 - **[action]** Phase 1.1 done: `Real` (64-bit) and `Vec3` in `real.rs`; flat-array `World` with stable `u32` indices, generation handles, lowest-first slot reuse and `add_force` in `world.rs`; packed single-island buffer with `build_islands` and `copy_back` in `island.rs`. The old per-node struct and `f32` step constant were replaced to follow layout rules 2 and 3. `cargo test` passes (2 tests). No roadmap check is proven yet; the first needs the fixed step (1.2).
+- **[action]** Phase 1.2 done: `sim.rs` has the fixed step (gravity and gathered forces, 4 placeholder substeps, forces cleared, integer step counter) and an FNV-1a state hash over raw bits. Tests prove same inputs give the same hash, different inputs differ, and free fall matches 0.5 g t². `cargo test` passes (5 tests). Roadmap: two milestone 1 checks ticked, milestone 1 at 29%, overall 5%.
