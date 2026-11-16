@@ -5,5 +5,7 @@
     "docs",
     "node-ts"
   ],
-  "app": "ribcage"
+  "app": "ribcage",
+  "visibility": "public",
+  "deployment": "local"
 }

@@ -16,11 +16,3 @@ Real-time node-beam physics engine for a KSP-like building game: Rust core (`cor
 
 - **Tests:** `cargo test` (Rust core, headless) and `pnpm test` / `pnpm typecheck` (TypeScript).
 - **Rules from the spec:** deterministic by default (fixed iteration order, no frame-time dependence, own sin/cos); no rendering or browser code in `core/`; build the debug tools and headless tests before any gameplay feature.
-
-## Public repository
-
-This repo is **public** (https://github.com/daxur-studios/ribcage). Everything committed is world-readable, including docs, plans, engineering records, commit messages and history.
-
-- **No private information:** no personal details, local machine paths (`C:\Users\...`, `D:\code\...`), emails, tokens, keys, or session transcripts. Use relative paths.
-- **No private repos or apps:** never name private repositories, products or their paths. Write generic wording such as "a consuming game"; keep those notes in the consuming repo.
-- **Regenerable output** (screenshots, renders, benchmark dumps) stays local in `artifacts/`, which is gitignored.
