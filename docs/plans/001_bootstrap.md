@@ -1,6 +1,6 @@
 ---
 type: Plan
-title: Bootstrap node-beam-physics
+title: Bootstrap ribcage
 description: Repository setup and the milestone order from the design spec.
 timestamp: 2026-11-16T19:05:47.257Z
 status: active
@@ -8,7 +8,7 @@ record: /docs/engineering-records/001_bootstrap.md
 tags: [bootstrap, setup]
 ---
 
-# Plan 001: Bootstrap node-beam-physics
+# Plan 001: Bootstrap ribcage
 
 Evidence: [ER 001](/docs/engineering-records/001_bootstrap.md). Design: [spec](/docs/research/node-beam-engine-design-spec.md).
 

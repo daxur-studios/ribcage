@@ -1,4 +1,4 @@
-# node-beam-physics
+# ribcage
 
 Repository instructions for AI coding agents.
 
@@ -16,4 +16,3 @@ Real-time node-beam physics engine for a KSP-like building game: Rust core (`cor
 
 - **Tests:** `cargo test` (Rust core, headless) and `pnpm test` / `pnpm typecheck` (TypeScript).
 - **Rules from the spec:** deterministic by default (fixed iteration order, no frame-time dependence, own sin/cos); no rendering or browser code in `core/`; build the debug tools and headless tests before any gameplay feature.
-- **"node-beam-physics" is a working name,** not a decision.

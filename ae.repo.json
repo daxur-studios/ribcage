@@ -5,5 +5,5 @@
     "docs",
     "node-ts"
   ],
-  "app": "node-beam-physics"
+  "app": "ribcage"
 }
