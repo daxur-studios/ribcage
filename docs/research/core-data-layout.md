@@ -53,7 +53,7 @@ World storage for milestone 1:
 | `inv_mass` | node | One over mass. Zero means pinned in place. |
 | `radius` | node | For collision later; stored from the start |
 | `force` | node | External force gathered this step (rule 7) |
-| `node_flags` | node | Alive, pinned |
+| `node_flags` | node | Alive, pinned, frozen (set when the node's island hit a bad number; cleared only by `unfreeze_node`). In the state hash. |
 | `beam_a`, `beam_b` | beam | Endpoint node indices |
 | `rest`, `rest0` | beam | Current and original rest length. Yield moves `rest`; `rest0` never changes. |
 | `compliance` | beam | One over stiffness |
@@ -89,7 +89,7 @@ After the solve, state is copied back to the world arrays.
 
 The index mapping is rebuilt only when an island's membership changes. On other steps only the state is copied.
 
-In milestone 1 there is one island holding everything. The split into islands is a function that returns one island for now.
+Islands are connected components, rebuilt every step. Two movable nodes are in the same island when a live beam links them, directly or through other movable nodes. Pinned nodes (inverse mass zero) never join islands: a pinned node is copied into every island that has a beam to it, so two structures bolted to the same anchor stay separate islands. Islands are ordered by their lowest movable node index (the island's root). A movable node with no beams is an island of its own. **[assumption]** A live beam between two pinned nodes belongs to no component; the core puts all such beams in one extra island after the others (root `u32::MAX`, no movable nodes), so they are still checked for break. The substep count is chosen per island.
 
 ### 6. One distance-solve function
 
@@ -106,7 +106,7 @@ Gravity is a per-node function, as in the spec, evaluated in the solver and repo
 ### 8. Buffers at the boundary
 
 - **Commands in:** a list of fixed-layout records (spawn, delete, set force, pin, set actuator target), applied in list order before anything else in the step.
-- **Events out:** fixed-layout records (break, yield, freeze, and later split, wake, contact). Each island writes its own list during the solve. Lists are joined in island order afterwards. Island order is by lowest node index.
+- **Events out:** fixed-layout records (break, yield, freeze, and later split, wake, contact). Each island writes its own list during the solve. Lists are joined in island order afterwards. Island order is by lowest movable node index. A freeze event has `index` = the island's lowest movable node and `value` = the substep number (1-based) in which the bad number appeared.
 - **Output:** node positions as 32-bit values in one buffer, written once per rendered frame.
 
 Record and replay is then "save the command lists per step", and the determinism test is "replay gives the same hash".
@@ -128,7 +128,9 @@ Record and replay is then "save the command lists per step", and the determinism
 
 The state hash covers the raw bits of positions, velocities, rest lengths and flags, in index order, using a simple hash written in the core.
 
-A bad number is detected at the end of each substep. The island is frozen (velocities zeroed, solving skipped) and an event is sent. Frozen state is part of the hash.
+A bad number is detected at the end of each substep, after the clamp: any movable node with a non-finite position or velocity. The whole island is frozen at once. Every node position goes back to its value at the start of the step, movable velocities are zeroed, beam rest lengths, flags and `last_lambda` go back to their start-of-step values, and the movable nodes get `NODE_FROZEN`. One freeze event is sent (see section 8). From the next step any island containing a frozen node is skipped: no solve, no events, no copy back. Other islands are not affected and stay bit-identical to a run without the bad number. The host releases a node with `World::unfreeze_node`. `node_flags` is part of the hash, so frozen state is too.
+
+**Movement clamp.** The world setting `max_speed` (default 1000 m/s, **[assumption]**) limits node speed. After the damping pass of each substep, a movable node faster than `max_speed` has its velocity scaled to `max_speed` and its position set to its position at the start of that substep plus the clamped velocity times `h`. There is no event; the world counter `clamped_nodes` counts distinct nodes clamped in the step and is reset at the start of each step. A NaN speed is not clamped; the bad-number check handles it.
 
 ## Solver outline
 
@@ -139,7 +141,7 @@ Per 60 Hz step, per island, with `n` substeps of length `h = 1 / (60 n)`:
    2. Solve each live beam once, in order, through `solve_distance`.
    3. Derive velocity from the change in position.
    4. Damp each live beam once, in order, through `damp_beam`.
-   5. Apply the movement and velocity clamps.
+   5. Apply the movement and velocity clamp, then check for bad numbers (freeze).
 2. After the last substep: decide break from each beam's total strain, emit the break and first-yield events. (`last_lambda` is stored per substep; yield itself happens inside the substeps.)
 
 One solver pass per substep with many substeps converges better than many passes in one step. This is the "small steps" form of XPBD.

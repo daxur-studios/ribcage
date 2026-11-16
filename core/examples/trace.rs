@@ -5,7 +5,7 @@
 
 use beam_core::island::build_islands;
 use beam_core::real::{Real, Vec3};
-use beam_core::sim::{gravity_at, state_hash, step, step_with_substeps};
+use beam_core::sim::{state_hash, step, step_with_substeps, total_energy};
 use beam_core::solver::{substep_count, MAX_SUBSTEPS, MIN_SUBSTEPS, SUBSTEP_C};
 use beam_core::event::EVENT_BREAK;
 use beam_core::world::{BeamSpec, World, BEAM_BROKEN};
@@ -100,28 +100,6 @@ fn hanging_beam() -> World {
 fn pull_for(strain: Real) -> Real {
     let omega: Real = 60.0;
     strain * omega * omega - 9.81
-}
-
-/// Kinetic plus gravitational plus elastic energy, in joules.
-fn total_energy(w: &World) -> Real {
-    let mut e = 0.0;
-    for i in 0..w.node_count() {
-        let u = i as usize;
-        if !w.node_alive(i) || w.inv_mass[u] == 0.0 {
-            continue;
-        }
-        let m = 1.0 / w.inv_mass[u];
-        e += 0.5 * m * w.vel[u].length_squared() - m * gravity_at(w.pos[u]).y * w.pos[u].y;
-    }
-    for b in 0..w.beam_count() {
-        let u = b as usize;
-        if !w.beam_alive(b) || w.compliance[u] == 0.0 {
-            continue;
-        }
-        let c = (w.pos[w.beam_b[u] as usize] - w.pos[w.beam_a[u] as usize]).length() - w.rest[u];
-        e += 0.5 * c * c / w.compliance[u];
-    }
-    e
 }
 
 fn commit() -> String {

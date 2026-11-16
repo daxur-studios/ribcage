@@ -9,6 +9,17 @@ use std::collections::BinaryHeap;
 
 pub const NODE_ALIVE: u32 = 1;
 pub const NODE_PINNED: u32 = 2;
+/// Set on every movable node of an island that hit a bad number (see [`crate::solver`]). A frozen
+/// node keeps its position and zero velocity, and any island containing it is not solved until
+/// the host calls [`World::unfreeze_node`]. Part of the state hash.
+pub const NODE_FROZEN: u32 = 4;
+
+/// Default for [`World::max_speed`], in metres per second.
+///
+/// **[assumption]** 1000 m/s: far above anything a bridge or a vehicle reaches at milestone 1
+/// scale, and far below the point where a substep of motion breaks the solver. Orbital speeds
+/// (KSP scale) are for a floating origin or rigid bodies later, not for this clamp.
+pub const DEFAULT_MAX_SPEED: Real = 1000.0;
 
 pub const BEAM_ALIVE: u32 = 1;
 pub const BEAM_BROKEN: u32 = 2;
@@ -32,7 +43,6 @@ pub struct BeamSpec {
     pub break_strain: Real,
 }
 
-#[derive(Default)]
 pub struct World {
     // Per node.
     pub pos: Vec<Vec3>,
@@ -62,11 +72,59 @@ pub struct World {
     pub events: Vec<Event>,
     /// Integer step counter; time is derived from it, never accumulated.
     pub step_count: u64,
+    /// Speed limit for every node, in metres per second ([`DEFAULT_MAX_SPEED`]). After each
+    /// substep a faster node is scaled down to this speed and its position is reset to match.
+    pub max_speed: Real,
+    /// Nodes that were clamped to `max_speed` in the last step, each counted once however many
+    /// substeps clamped it. Reset every step. A debugging number; there is no event for it.
+    pub clamped_nodes: u32,
+}
+
+impl Default for World {
+    fn default() -> World {
+        World {
+            pos: Vec::new(),
+            vel: Vec::new(),
+            inv_mass: Vec::new(),
+            radius: Vec::new(),
+            force: Vec::new(),
+            node_flags: Vec::new(),
+            node_gen: Vec::new(),
+            beam_a: Vec::new(),
+            beam_b: Vec::new(),
+            rest: Vec::new(),
+            rest0: Vec::new(),
+            compliance: Vec::new(),
+            damping: Vec::new(),
+            yield_strain: Vec::new(),
+            break_strain: Vec::new(),
+            beam_flags: Vec::new(),
+            last_lambda: Vec::new(),
+            beam_gen: Vec::new(),
+            free_nodes: BinaryHeap::new(),
+            free_beams: BinaryHeap::new(),
+            events: Vec::new(),
+            step_count: 0,
+            max_speed: DEFAULT_MAX_SPEED,
+            clamped_nodes: 0,
+        }
+    }
 }
 
 impl World {
     pub fn new() -> World {
         World::default()
+    }
+
+    pub fn node_frozen(&self, i: u32) -> bool {
+        self.node_flags[i as usize] & NODE_FROZEN != 0
+    }
+
+    /// Clears the frozen flag. The node's position and zero velocity stay as the freeze left
+    /// them; the island is solved again from the next step. The host is responsible for having
+    /// fixed whatever produced the bad number.
+    pub fn unfreeze_node(&mut self, i: u32) {
+        self.node_flags[i as usize] &= !NODE_FROZEN;
     }
 
     pub fn node_count(&self) -> u32 {

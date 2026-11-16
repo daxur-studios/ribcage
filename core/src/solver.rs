@@ -6,9 +6,11 @@
 //! ([`solve_distance`]); damping is a separate velocity pass ([`damp_beam`]); break is checked
 //! once after the last substep ([`crate::failure`]).
 //! Broken beams are not in the island, so neither the solve nor the substep rule sees them.
-//! Movement clamps arrive in 1.6.
+//! Stability guards (phase 1.6) sit around the solver, not in it: after each substep's damping
+//! pass a node faster than `max_speed` is clamped ([`solve_island`]), and a non-finite position
+//! or velocity freezes the island ([`SolveOutput::frozen`]).
 
-use crate::event::Event;
+use crate::event::{Event, EVENT_FREEZE};
 use crate::failure::check_failure;
 use crate::island::Island;
 use crate::real::{Real, Vec3};
@@ -157,24 +159,55 @@ pub fn damp_beam(pos: &[Vec3], vel: &mut [Vec3], inv_mass: &[Real], a: usize, b:
     vel[b] = vel[b] - dir * (wb * j);
 }
 
+/// What one island's solve returns.
+#[derive(Debug, PartialEq)]
+pub struct SolveOutput {
+    /// Events in ascending beam order, `step` left at zero for the caller to stamp. A frozen
+    /// island has exactly one, the freeze event.
+    pub events: Vec<Event>,
+    /// Nodes of this island clamped to `max_speed` at least once this step.
+    pub clamped: u32,
+    /// The island hit a bad number and was frozen: the caller sets `NODE_FROZEN` on its movable
+    /// nodes.
+    pub frozen: bool,
+}
+
 /// Advances one island by one fixed step in `n` substeps. Per substep: predict (gravity and
 /// gathered forces into velocity, move), solve every beam once in order, derive velocity
-/// from the change in position, then damp every beam once in order ([`damp_beam`]). Pinned
-/// nodes (inverse mass zero) never move. Yield happens inside the substeps (the force cap in
-/// [`solve_distance`], which sets the `YIELDED` flag). After the last substep, break is
-/// checked once and the events returned ([`check_failure`]).
+/// from the change in position, damp every beam once in order ([`damp_beam`]), then apply the
+/// clamps and the bad-number check. Pinned nodes (inverse mass zero) never move. Yield happens
+/// inside the substeps (the force cap in [`solve_distance`], which sets the `YIELDED` flag).
+/// After the last substep, break is checked once and the events returned ([`check_failure`]).
+///
+/// **Movement clamp.** A movable node whose speed is above `max_speed` has its velocity scaled
+/// to `max_speed` (one square root, one divide) and its position reset to the substep's start
+/// position plus the clamped velocity times `h`, so position and velocity stay consistent. A
+/// speed that is NaN is not above anything and is left to the bad-number check.
+///
+/// **Bad-number freeze.** At the end of every substep, after the clamp, each movable node's
+/// position and velocity must be finite. If one is not, the island stops at once: every node's
+/// position goes back to its value at the start of the step (pinned nodes included, since a
+/// bad number reaches them through zero-weight arithmetic), movable velocities are zeroed,
+/// beam `rest`, flags and `last_lambda` go back to their start-of-step values, and the
+/// substep number is reported in a freeze event. Nothing else is checked or emitted.
 ///
 /// `last_lambda` ends up holding each beam's spring force from the last substep, `-Δλ / h²`,
 /// in newtons, positive in tension. It never exceeds the beam's yield force, and it does not
 /// include the damper (zero for a beam that just broke).
 #[allow(clippy::needless_range_loop)] // explicit ascending index order is a determinism rule
-pub fn solve_island(isl: &mut Island, n: u32) -> Vec<Event> {
+pub fn solve_island(isl: &mut Island, n: u32, max_speed: Real) -> SolveOutput {
     let h = STEP_SECONDS / n as Real;
     let nodes = isl.pos.len();
     let beams = isl.beam_a.len();
     let mut prev = isl.pos.clone();
     let flags_before = isl.beam_flags.clone();
-    for _ in 0..n {
+    let start_pos = isl.pos.clone();
+    let start_vel = isl.vel.clone();
+    let start_rest = isl.rest.clone();
+    let start_lambda = isl.last_lambda.clone();
+    let mut was_clamped = vec![false; nodes];
+    let mut clamped = 0u32;
+    for substep in 1..=n {
         for i in 0..nodes {
             prev[i] = isl.pos[i];
             let w = isl.inv_mass[i];
@@ -212,8 +245,39 @@ pub fn solve_island(isl: &mut Island, n: u32) -> Vec<Event> {
         for k in 0..beams {
             damp_beam(&isl.pos, &mut isl.vel, &isl.inv_mass, isl.beam_a[k] as usize, isl.beam_b[k] as usize, isl.damping[k], h);
         }
+        // Movement and velocity clamp, then the bad-number check, in ascending node order.
+        let mut bad = false;
+        for i in 0..nodes {
+            if isl.inv_mass[i] == 0.0 {
+                continue;
+            }
+            let speed = isl.vel[i].length();
+            if speed > max_speed {
+                isl.vel[i] = isl.vel[i] * (max_speed / speed);
+                isl.pos[i] = prev[i] + isl.vel[i] * h;
+                if !was_clamped[i] {
+                    was_clamped[i] = true;
+                    clamped += 1;
+                }
+            }
+            let (p, v) = (isl.pos[i], isl.vel[i]);
+            if !(p.x.is_finite() && p.y.is_finite() && p.z.is_finite() && v.x.is_finite() && v.y.is_finite() && v.z.is_finite()) {
+                bad = true;
+            }
+        }
+        if bad {
+            for i in 0..nodes {
+                isl.pos[i] = start_pos[i];
+                isl.vel[i] = if isl.inv_mass[i] != 0.0 { Vec3::ZERO } else { start_vel[i] };
+            }
+            isl.rest.copy_from_slice(&start_rest);
+            isl.beam_flags.copy_from_slice(&flags_before);
+            isl.last_lambda.copy_from_slice(&start_lambda);
+            let event = Event { kind: EVENT_FREEZE, index: isl.root, step: 0, value: substep as Real };
+            return SolveOutput { events: vec![event], clamped, frozen: true };
+        }
     }
-    check_failure(isl, &flags_before)
+    SolveOutput { events: check_failure(isl, &flags_before), clamped, frozen: false }
 }
 
 #[cfg(test)]
@@ -421,8 +485,8 @@ mod tests {
         };
         let mut i1 = build_islands(&make());
         let mut i2 = build_islands(&make());
-        solve_island(&mut i1[0], 9);
-        solve_island(&mut i2[0], 9);
+        solve_island(&mut i1[0], 9, 1000.0);
+        solve_island(&mut i2[0], 9, 1000.0);
         assert_eq!(i1, i2);
         let (mut a, mut b) = (make(), make());
         for s in 0..300 {

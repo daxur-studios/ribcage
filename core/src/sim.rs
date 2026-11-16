@@ -5,7 +5,7 @@ use crate::event::Event;
 use crate::island::{build_islands, copy_back};
 use crate::real::{Real, Vec3};
 use crate::solver::{solve_island, substep_count};
-use crate::world::World;
+use crate::world::{World, NODE_FROZEN};
 
 /// Standard gravity as a per-node acceleration (a function so it can vary later).
 pub fn gravity_at(_pos: Vec3) -> Vec3 {
@@ -26,16 +26,31 @@ pub fn step_with_substeps(world: &mut World, substeps: u32) -> u32 {
 
 fn step_inner(world: &mut World, fixed: Option<u32>) -> u32 {
     world.events.clear();
+    world.clamped_nodes = 0;
     let done = world.step_count + 1;
     let mut islands = build_islands(world);
     let mut most = 0;
     for isl in islands.iter_mut() {
+        // An island holding a frozen node is not solved and reports nothing; its nodes keep
+        // their position and zero velocity. Its buffer is dropped without a copy back.
+        if isl.node_world.iter().any(|&i| world.node_flags[i as usize] & NODE_FROZEN != 0) {
+            isl.skipped = true;
+            continue;
+        }
         let n = fixed.unwrap_or_else(|| substep_count(isl));
-        let events = solve_island(isl, n);
-        world.events.extend(events.into_iter().map(|e| Event { step: done, ..e }));
+        let out = solve_island(isl, n, world.max_speed);
+        world.clamped_nodes += out.clamped;
+        if out.frozen {
+            for (p, &i) in isl.node_world.iter().enumerate() {
+                if isl.inv_mass[p] != 0.0 {
+                    world.node_flags[i as usize] |= NODE_FROZEN;
+                }
+            }
+        }
+        world.events.extend(out.events.into_iter().map(|e| Event { step: done, ..e }));
         most = most.max(n);
     }
-    for isl in &islands {
+    for isl in islands.iter().filter(|isl| !isl.skipped) {
         copy_back(world, isl);
     }
     for f in world.force.iter_mut() {
@@ -43,6 +58,31 @@ fn step_inner(world: &mut World, fixed: Option<u32>) -> u32 {
     }
     world.step_count += 1;
     most
+}
+
+/// Kinetic plus gravitational plus elastic energy of the live world, in joules: for each
+/// movable node `0.5 m v^2 + m g y` (zero of potential at `y = 0`), for each live beam with
+/// nonzero compliance `0.5 (length - rest)^2 / compliance`. Pinned nodes carry none. Read-only
+/// (debug traces and the stability tests); not part of the solve.
+pub fn total_energy(w: &World) -> Real {
+    let mut e = 0.0;
+    for i in 0..w.node_count() {
+        let u = i as usize;
+        if !w.node_alive(i) || w.inv_mass[u] == 0.0 {
+            continue;
+        }
+        let m = 1.0 / w.inv_mass[u];
+        e += 0.5 * m * w.vel[u].length_squared() - m * gravity_at(w.pos[u]).y * w.pos[u].y;
+    }
+    for b in 0..w.beam_count() {
+        let u = b as usize;
+        if !w.beam_alive(b) || w.compliance[u] == 0.0 {
+            continue;
+        }
+        let c = (w.pos[w.beam_b[u] as usize] - w.pos[w.beam_a[u] as usize]).length() - w.rest[u];
+        e += 0.5 * c * c / w.compliance[u];
+    }
+    e
 }
 
 const FNV_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;

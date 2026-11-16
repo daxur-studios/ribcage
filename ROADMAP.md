@@ -1,6 +1,6 @@
 # ribcage roadmap
 
-**TL;DR.** Overall progress: **9%**. Now: milestone 1 (solver core and tools). First playable slice ends at milestone 4.
+**TL;DR.** Overall progress: **12%**. Now: milestone 1 (solver core and tools). First playable slice ends at milestone 4.
 
 This page is the single answer to "what are we building, and how far along is it?". The design is the [spec](docs/research/node-beam-engine-design-spec.md). The detailed work for the current milestone lives in its plan.
 
@@ -19,7 +19,7 @@ Each milestone has a weight (its share of the whole) and a short list of checks.
 | # | Milestone | Weight | Done | Status |
 | --- | --- | --- | --- | --- |
 | 0 | Scaffold | 2 | 100% | done |
-| 1 | Solver core and tools | 12 | 57% | **now** |
+| 1 | Solver core and tools | 12 | 86% | **now** |
 | 2 | 2D bridge builder | 8 | 0% | next |
 | 3 | 3D on terrain in Three.js | 10 | 0% | |
 | 4 | Parts and assembly (first playable slice) | 12 | 0% | |
@@ -28,7 +28,7 @@ Each milestone has a weight (its share of the whole) and a short list of checks.
 | 7 | Ground and water | 10 | 0% | |
 | 8 | Craft-against-craft collision and threads | 12 | 0% | |
 | 9 | Visual layer | 8 | 0% | |
-| | **Overall** | **100** | **9%** | |
+| | **Overall** | **100** | **12%** | |
 
 ## Who plans and builds what
 
@@ -62,8 +62,8 @@ Planning has two stages. The costly-to-redo milestones (5 and 8) have an early d
 - [x] The same inputs give an identical state hash on every run.
 - [x] A cantilever's tip deflection matches the textbook formula within a stated tolerance. (Within 2% with enough substeps; at the rule's count softer by a measured `0.4 · c²`, see ER 001, phase 1.4.)
 - [x] A beam loaded below yield returns to rest, even when the load arrives suddenly; past its yield force it stays bent and carries no more; past break it is flagged broken (it keeps its slot and stops carrying load) and reports an event. (Tests in `core/tests/failure.rs`; see ER 001, phase 1.5 and its damping fix.)
-- [ ] A resting structure gains no energy over ten simulated minutes.
-- [ ] A bad number freezes the structure and reports, instead of spreading.
+- [x] A resting structure gains no energy over ten simulated minutes. (After settling, rises stay at rounding level, 8e-14 J on 24 J; `core/tests/energy.rs`, see ER 001, phase 1.6.)
+- [x] A bad number freezes the structure and reports, instead of spreading. (Per island; other islands stay bit-identical; `core/tests/guards.rs`.)
 - [ ] A benchmark scene reports beams, substeps and milliseconds per step.
 
 ### 2. 2D bridge builder
