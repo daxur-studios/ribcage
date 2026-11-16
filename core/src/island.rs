@@ -18,8 +18,12 @@ pub struct Island {
     pub beam_a: Vec<u32>,
     pub beam_b: Vec<u32>,
     pub rest: Vec<Real>,
+    pub rest0: Vec<Real>,
     pub compliance: Vec<Real>,
     pub damping: Vec<Real>,
+    pub yield_strain: Vec<Real>,
+    pub break_strain: Vec<Real>,
+    pub beam_flags: Vec<u32>,
     pub last_lambda: Vec<Real>,
 }
 
@@ -48,8 +52,12 @@ pub fn build_islands(world: &World) -> Vec<Island> {
         island.beam_a.push(packed[world.beam_a[u] as usize]);
         island.beam_b.push(packed[world.beam_b[u] as usize]);
         island.rest.push(world.rest[u]);
+        island.rest0.push(world.rest0[u]);
         island.compliance.push(world.compliance[u]);
         island.damping.push(world.damping[u]);
+        island.yield_strain.push(world.yield_strain[u]);
+        island.break_strain.push(world.break_strain[u]);
+        island.beam_flags.push(world.beam_flags[u]);
         island.last_lambda.push(world.last_lambda[u]);
     }
     vec![island]
@@ -63,6 +71,7 @@ pub fn copy_back(world: &mut World, island: &Island) {
     }
     for (p, &w) in island.beam_world.iter().enumerate() {
         world.rest[w as usize] = island.rest[p];
+        world.beam_flags[w as usize] = island.beam_flags[p];
         world.last_lambda[w as usize] = island.last_lambda[p];
     }
 }

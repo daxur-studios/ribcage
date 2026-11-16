@@ -1,6 +1,7 @@
 //! The fixed 60 Hz step and the state hash. The solve itself is in [`crate::solver`].
 //! Islands and nodes visited in ascending index order (determinism list).
 
+use crate::event::Event;
 use crate::island::{build_islands, copy_back};
 use crate::real::{Real, Vec3};
 use crate::solver::{solve_island, substep_count};
@@ -24,11 +25,14 @@ pub fn step_with_substeps(world: &mut World, substeps: u32) -> u32 {
 }
 
 fn step_inner(world: &mut World, fixed: Option<u32>) -> u32 {
+    world.events.clear();
+    let done = world.step_count + 1;
     let mut islands = build_islands(world);
     let mut most = 0;
     for isl in islands.iter_mut() {
         let n = fixed.unwrap_or_else(|| substep_count(isl));
-        solve_island(isl, n);
+        let events = solve_island(isl, n);
+        world.events.extend(events.into_iter().map(|e| Event { step: done, ..e }));
         most = most.max(n);
     }
     for isl in &islands {

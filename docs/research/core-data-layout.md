@@ -157,7 +157,7 @@ This is the XPBD paper's `γ = α · β̃ / h` with `β̃ = h² · damping`, so 
 - **Elastic strain** `(length - rest) / rest0` decides yield. Past the yield value, `rest` moves toward the current length until the elastic strain is back at the yield value. The beam stays bent.
 - **Total strain** `(length - rest0) / rest0` decides break. Past the break value, the beam is flagged broken. Measuring against the original length means a beam that has yielded a long way still reaches its break limit.
 
-Both are checked in tension and in compression.
+Both are checked in tension and in compression. Break wins: a beam that breaks gets a break event and no yield event. A yield event is sent once, the first time, and a `yielded` flag records it. Events are cleared at the start of each step and read by the host after it. Under a held load, a beam past yield is perfectly plastic: each step its rest length follows its length, so it flows until the load drops, load moves to other beams, or it breaks (measured in phase 1.5).
 
 **Substep count.** For each beam, `ω = sqrt(stiffness · (inverse mass a + inverse mass b))`. The island's count is the smallest `n` with `ω_max · h ≤ c`, clamped to a minimum and maximum.
 

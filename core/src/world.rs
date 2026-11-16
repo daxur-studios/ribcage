@@ -2,6 +2,7 @@
 //! and one door for external forces (rule 7). The solver never reads these directly;
 //! it works on a packed [`crate::island::Island`] (rule 5).
 
+use crate::event::Event;
 use crate::real::{Real, Vec3};
 use std::cmp::Reverse;
 use std::collections::BinaryHeap;
@@ -11,6 +12,8 @@ pub const NODE_PINNED: u32 = 2;
 
 pub const BEAM_ALIVE: u32 = 1;
 pub const BEAM_BROKEN: u32 = 2;
+/// Set the first time a beam yields (its `rest` has moved at least once).
+pub const BEAM_YIELDED: u32 = 4;
 
 /// Index plus generation. A stale handle (slot reused) is detected instead of aliasing.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -54,6 +57,9 @@ pub struct World {
     // Dead slots, handed out lowest index first (deterministic; no hash order).
     free_nodes: BinaryHeap<Reverse<u32>>,
     free_beams: BinaryHeap<Reverse<u32>>,
+    /// Events from the last step, in island order then ascending beam order (rule 8). Cleared
+    /// at the start of every step; the host reads it after the step.
+    pub events: Vec<Event>,
     /// Integer step counter; time is derived from it, never accumulated.
     pub step_count: u64,
 }

@@ -2,6 +2,8 @@
 //! Built to WebAssembly for the game and natively for tests and benchmarks.
 //! Storage rules: docs/research/core-data-layout.md.
 
+pub mod event;
+pub mod failure;
 pub mod island;
 pub mod real;
 pub mod sim;

@@ -2,8 +2,12 @@
 //! substeps. A pure function of the packed island buffer (layout rule 5); it never reads the
 //! world arrays. One distance function for every beam (rule 6). Only add, subtract, multiply,
 //! divide and square root on `Real`, nodes and beams in ascending packed order, no fused
-//! multiply-add (determinism list). Yield and break arrive in phase 1.5; clamps in 1.6.
+//! multiply-add (determinism list). Yield and break run once after the last substep
+//! ([`crate::failure`]); broken beams are not in the island, so neither the solve nor the
+//! substep rule sees them. Clamps arrive in 1.6.
 
+use crate::event::Event;
+use crate::failure::check_failure;
 use crate::island::Island;
 use crate::real::{Real, Vec3};
 use crate::sim::gravity_at;
@@ -99,12 +103,13 @@ pub fn solve_distance(
 
 /// Advances one island by one fixed step in `n` substeps. Per substep: predict (gravity and
 /// gathered forces into velocity, move), solve every beam once in order, derive velocity
-/// from the change in position. Pinned nodes (inverse mass zero) never move.
+/// from the change in position. Pinned nodes (inverse mass zero) never move. After the last
+/// substep, yield and break are checked once ([`check_failure`]) and the events returned.
 ///
 /// `last_lambda` ends up holding each beam's constraint force from the last substep,
-/// `-Δλ / h²`, in newtons, positive in tension.
+/// `-Δλ / h²`, in newtons, positive in tension (zero for a beam that just broke).
 #[allow(clippy::needless_range_loop)] // explicit ascending index order is a determinism rule
-pub fn solve_island(isl: &mut Island, n: u32) {
+pub fn solve_island(isl: &mut Island, n: u32) -> Vec<Event> {
     let h = STEP_SECONDS / n as Real;
     let nodes = isl.pos.len();
     let mut prev = isl.pos.clone();
@@ -140,6 +145,7 @@ pub fn solve_island(isl: &mut Island, n: u32) {
             isl.vel[i] = (isl.pos[i] - prev[i]) / h;
         }
     }
+    check_failure(isl)
 }
 
 #[cfg(test)]

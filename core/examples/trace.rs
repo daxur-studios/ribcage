@@ -7,7 +7,8 @@ use beam_core::island::build_islands;
 use beam_core::real::{Real, Vec3};
 use beam_core::sim::{gravity_at, state_hash, step, step_with_substeps};
 use beam_core::solver::{substep_count, MAX_SUBSTEPS, MIN_SUBSTEPS, SUBSTEP_C};
-use beam_core::world::{BeamSpec, World};
+use beam_core::event::EVENT_BREAK;
+use beam_core::world::{BeamSpec, World, BEAM_BROKEN};
 use beam_core::{STEP_HZ, STEP_SECONDS};
 use std::fmt::Write as _;
 use std::fs;
@@ -19,7 +20,7 @@ mod truss;
 const FORMAT_VERSION: u32 = 1;
 
 /// The scenario registry: one name, one command, one set of traces.
-const SCENARIOS: &[&str] = &["hash-split", "brace", "substeps", "cantilever"];
+const SCENARIOS: &[&str] = &["hash-split", "brace", "substeps", "cantilever", "snap"];
 
 fn base_scene() -> World {
     let mut w = World::new();
@@ -76,6 +77,25 @@ fn cantilever() -> World {
         w.add_beam(b0, t1, s(diag));
     }
     w
+}
+
+/// A 1 m beam hanging from a pinned node under a 1 kg mass, critically damped, with a rubbery
+/// 4% yield and 15% break strain so the stretch is visible on screen. Natural frequency 60 rad/s,
+/// so the beam settles within each 60 Hz step and a slow load ramp is quasi-static.
+fn hanging_beam() -> World {
+    let mut w = World::new();
+    let omega: Real = 60.0;
+    w.add_node(Vec3::new(0.0, 0.0, 0.0), 0.0, 0.05);
+    w.add_node(Vec3::new(0.0, -1.0, 0.0), 1.0, 0.05);
+    let spec = BeamSpec { rest: 1.0, compliance: 1.0 / (omega * omega), damping: 2.0 * omega, yield_strain: 0.04, break_strain: 0.15 };
+    w.add_beam(0, 1, spec);
+    w
+}
+
+/// Downward pull on the hanging beam's mass that stretches it by `strain` (elastic, settled).
+fn pull_for(strain: Real) -> Real {
+    let omega: Real = 60.0;
+    strain * omega * omega - 9.81
 }
 
 /// Kinetic plus gravitational plus elastic energy, in joules.
@@ -172,6 +192,8 @@ fn record(scenario: &str, run: &Run, mut w: World, every: u32) -> String {
         );
     }
     o.push_str("],\"steps\":[");
+    // Events since the last kept step, so keep_every never drops one.
+    let mut pending = String::new();
     for s in 0..=run.steps {
         if s > 0 {
             (run.before_step)(&mut w, s);
@@ -179,6 +201,13 @@ fn record(scenario: &str, run: &Run, mut w: World, every: u32) -> String {
                 Substeps::Rule => step(&mut w),
                 Substeps::Fixed(n) => step_with_substeps(&mut w, n),
             };
+            for e in &w.events {
+                let kind = if e.kind == EVENT_BREAK { "break" } else { "yield" };
+                if !pending.is_empty() {
+                    pending.push(',');
+                }
+                let _ = write!(pending, "{{\"kind\":\"{kind}\",\"beam\":{},\"step\":{},\"value\":{}}}", e.index, e.step, e.value);
+            }
         }
         if s % every != 0 && s != run.steps {
             continue;
@@ -202,7 +231,20 @@ fn record(scenario: &str, run: &Run, mut w: World, every: u32) -> String {
             let d = w.pos[w.beam_b[b] as usize] - w.pos[w.beam_a[b] as usize];
             let _ = write!(o, "{}", (d.length() - w.rest[b]) / w.rest0[b]);
         }
-        o.push_str("],\"events\":[],\"commands\":[]}");
+        // Permanent set per beam: how far yield has moved the rest length, as a strain of rest0.
+        // Optional field (the player ignores a trace without it); `broken` lists dead beams.
+        o.push_str("],\"set\":[");
+        for b in 0..w.beam_count() as usize {
+            if b > 0 {
+                o.push(',');
+            }
+            let _ = write!(o, "{}", (w.rest[b] - w.rest0[b]) / w.rest0[b]);
+        }
+        o.push_str("],\"broken\":[");
+        let dead: Vec<String> = (0..w.beam_count()).filter(|&b| w.beam_flags[b as usize] & BEAM_BROKEN != 0).map(|b| b.to_string()).collect();
+        o.push_str(&dead.join(","));
+        let _ = write!(o, "],\"events\":[{pending}],\"commands\":[]}}");
+        pending.clear();
     }
     o.push_str("]}");
     o
@@ -280,6 +322,29 @@ fn main() {
                 r.marks.push(("textbook tip".into(), spec.length(), tip_y, tips.clone()));
                 out.push((format!("{scenario}-{name}"), record(scenario, &r, build(&spec), every)));
             }
+        }
+        "snap" => {
+            // The same hanging beam under three slowly growing pulls (120 steps up, 120 down, then
+            // rest): one that stays below the yield strain, one that barely passes it, and one
+            // that keeps growing. Under a held load a yielded beam flows every step (perfectly
+            // plastic: the rest length follows the length), so it snaps if the load stays.
+            let ramp = |peak: Real, down: bool| -> &'static dyn Fn(&mut World, u32) {
+                Box::leak(Box::new(move |w: &mut World, s: u32| {
+                    let rising = s.min(120) as Real / 120.0;
+                    let k = if down { rising - s.saturating_sub(120).min(120) as Real / 120.0 } else { s as Real / 120.0 };
+                    if k > 0.0 {
+                        w.add_force(1, Vec3::new(0.0, -pull_for(peak * k), 0.0));
+                    }
+                    // A demo-side floor 1.8 m down, so the snapped mass stays in frame.
+                    if w.pos[1].y < -1.8 {
+                        w.pos[1].y = -1.8;
+                        w.vel[1] = Vec3::ZERO;
+                    }
+                }))
+            };
+            out.push((format!("{scenario}-a"), record(scenario, &run("springs back: load peaks at 3% strain", 300, Substeps::Rule, "none", ramp(0.03, true)), hanging_beam(), every)));
+            out.push((format!("{scenario}-b"), record(scenario, &run("stays bent: load peaks at 4.5% strain", 300, Substeps::Rule, "none", ramp(0.045, true)), hanging_beam(), every)));
+            out.push((format!("{scenario}-c"), record(scenario, &run("snaps: load keeps growing", 300, Substeps::Rule, "none", ramp(0.06, false)), hanging_beam(), every)));
         }
         _ => unreachable!(),
     }

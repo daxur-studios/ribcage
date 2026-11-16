@@ -16,6 +16,7 @@
   .pane h2 { font-size:13px; margin:0 0 6px; color:var(--dim); font-weight:normal; }
   canvas { width:100%; height:auto; display:block; background:#0b0e13; border-radius:4px; }
   .hash { margin-top:6px; letter-spacing:.5px; }
+  .log { margin-top:4px; min-height:1.4em; color:var(--bad); }
   #bar { display:flex; gap:12px; align-items:center; padding:12px 16px; flex-wrap:wrap; }
   #scrub { flex:1 1 240px; }
   #status { padding:0 16px 12px; min-height:3em; font-size:16px; }
@@ -43,7 +44,8 @@
   <code>cargo run -p beam-core --example trace -- hash-split</code>).
   Other scenarios: <code>brace</code> (<code>?t=brace-open,brace-braced</code>) and
   <code>substeps</code> (<code>?t=substeps-01,substeps-04,substeps-16,substeps-rule</code>) and
-  <code>cantilever</code> (<code>?t=cantilever-08,cantilever-16,cantilever-rule,cantilever-32</code>).
+  <code>cantilever</code> (<code>?t=cantilever-08,cantilever-16,cantilever-rule,cantilever-32</code>) and
+  <code>snap</code> (<code>?t=snap-a,snap-b,snap-c</code>: springs back, stays bent, snaps).
 </div>
 <script>
 "use strict";
@@ -62,10 +64,10 @@ function build() {
   const stage = $("stage"); stage.innerHTML = ""; panes = [];
   for (const t of traces) {
     const d = document.createElement("div"); d.className = "pane";
-    d.innerHTML = "<h2></h2><canvas width='" + W + "' height='" + H + "'></canvas><div class='hash'></div>";
+    d.innerHTML = "<h2></h2><canvas width='" + W + "' height='" + H + "'></canvas><div class='hash'></div><div class='log'></div>";
     d.querySelector("h2").textContent = t.label;
     stage.appendChild(d);
-    panes.push({ canvas: d.querySelector("canvas"), hash: d.querySelector(".hash") });
+    panes.push({ canvas: d.querySelector("canvas"), hash: d.querySelector(".hash"), log: d.querySelector(".log") });
   }
   const t0 = traces[0], ms = (1000 * t0.step_seconds).toFixed(2);
   $("replay").textContent = "replay, recorded at " + ms + " ms per step · " + t0.scenario + " · core " + t0.core_commit + " · " + t0.precision;
@@ -100,11 +102,19 @@ function draw() {
     const s = t.steps[frame], c = panes[k].canvas.getContext("2d");
     const differs = compare && traces.some(o => o.steps[frame].hash !== s.hash);
     c.clearRect(0, 0, W, H);
-    c.strokeStyle = "#7aa2ff"; c.lineWidth = 2;
-    for (const bm of t.beams) {
-      c.beginPath(); c.moveTo(px(s.pos[3 * bm.a]), py(s.pos[3 * bm.a + 1]));
-      c.lineTo(px(s.pos[3 * bm.b]), py(s.pos[3 * bm.b + 1])); c.stroke();
-    }
+    // Beams are coloured by elastic strain: blue at rest, orange at the yield strain. A broken
+    // beam (listed in "broken") is drawn red and dashed between its nodes' current positions.
+    const dead = new Set(s.broken || []);
+    t.beams.forEach((bm, n) => {
+      const x0 = px(s.pos[3 * bm.a]), y0 = py(s.pos[3 * bm.a + 1]), x1 = px(s.pos[3 * bm.b]), y1 = py(s.pos[3 * bm.b + 1]);
+      c.lineWidth = 2;
+      if (dead.has(n)) { c.strokeStyle = "#ff5d5d"; c.setLineDash([4, 6]); c.lineWidth = 1; }
+      else {
+        const f = Math.min(1, Math.abs(s.strain[n]) / (bm.yield || 1));
+        c.strokeStyle = "rgb(" + Math.round(122 + 133 * f) + "," + Math.round(162 + 13 * f) + "," + Math.round(255 - 176 * f) + ")";
+      }
+      c.beginPath(); c.moveTo(x0, y0); c.lineTo(x1, y1); c.stroke(); c.setLineDash([]);
+    });
     c.fillStyle = !compare ? "#e6e9ef" : differs ? "#ff5d5d" : "#4cc38a";
     for (let i = 0; i < s.pos.length; i += 3) { c.beginPath(); c.arc(px(s.pos[i]), py(s.pos[i + 1]), 5, 0, 7); c.fill(); }
     // Reference marks: an orange cross and dashed level line, with the marked nodes' mean height.
@@ -120,7 +130,12 @@ function draw() {
         marks += " · " + m.label + " y " + m.y.toFixed(3) + " m, now " + y.toFixed(3) + " m";
       }
     }
-    panes[k].hash.textContent = "substeps " + s.substeps + " · hash " + s.hash + marks;
+    // Event log up to this frame (events carry their step; kept frames hold the ones since the last).
+    const lines = [];
+    for (let i = 0; i <= frame; i++) for (const e of t.steps[i].events || []) lines.push("step " + e.step + ": beam " + e.beam + " " + e.kind + " (strain " + (100 * e.value).toFixed(1) + "%)");
+    panes[k].log.textContent = lines.join(" · ");
+    const set = (s.set || []).map(v => (100 * v).toFixed(1) + "%").join(", ");
+    panes[k].hash.textContent = (set ? "permanent set " + set + " · " : "") + "substeps " + s.substeps + " · hash " + s.hash + marks;
     panes[k].hash.style.color = !compare ? "var(--dim)" : differs ? "var(--bad)" : "var(--ok)";
     if (k > 0) for (let i = 0; i < s.pos.length; i++) worst = Math.max(worst, Math.abs(s.pos[i] - ref.steps[frame].pos[i]));
   });
