@@ -46,6 +46,8 @@ A first guess, corrected as each milestone starts. "Plan" means writing that mil
 | 8 | Collision and threads | [brief](docs/research/collision-and-threads-design-brief.md) done (Fable); phases by Opus | Opus | Threads must give identical results; costly to redo |
 | 9 | Visual layer | Sonnet | Sonnet | Visual only, judged by eye |
 
+Every milestone and every worthwhile slice also gets a demo: see the [demo and media plan](docs/research/demo-and-media-plan.md).
+
 Planning has two stages. The costly-to-redo milestones (5 and 8) have an early design brief, and milestone 1 follows the [core layout rules](docs/research/core-data-layout.md) those briefs produced. Every milestone gets its detailed phase plan when it starts. No Fable planning remains nominated; a new nomination needs the owner's approval.
 
 ## Milestone checks
