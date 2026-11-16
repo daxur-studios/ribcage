@@ -41,6 +41,8 @@
   (or serve the repo root, for example <code>python -m http.server</code>, and open
   <code>demo/player.html?t=hash-split-a,hash-split-b</code> after
   <code>cargo run -p beam-core --example trace -- hash-split</code>).
+  Other scenarios: <code>brace</code> (<code>?t=brace-open,brace-braced</code>) and
+  <code>substeps</code> (<code>?t=substeps-01,substeps-04,substeps-16,substeps-rule</code>).
 </div>
 <script>
 "use strict";
@@ -88,22 +90,26 @@ function draw() {
   $("scrub").value = frame;
   $("stepno").textContent = "step " + ref.steps[frame].i;
   let worst = 0;
+  // Traces without a "compare" field (older ones) are same-scene runs whose hashes should match.
+  const compare = (ref.compare || "hash") === "hash";
   traces.forEach((t, k) => {
     const s = t.steps[frame], c = panes[k].canvas.getContext("2d");
-    const differs = traces.some(o => o.steps[frame].hash !== s.hash);
+    const differs = compare && traces.some(o => o.steps[frame].hash !== s.hash);
     c.clearRect(0, 0, W, H);
     c.strokeStyle = "#7aa2ff"; c.lineWidth = 2;
     for (const bm of t.beams) {
       c.beginPath(); c.moveTo(px(s.pos[3 * bm.a]), py(s.pos[3 * bm.a + 1]));
       c.lineTo(px(s.pos[3 * bm.b]), py(s.pos[3 * bm.b + 1])); c.stroke();
     }
-    c.fillStyle = differs ? "#ff5d5d" : "#4cc38a";
+    c.fillStyle = !compare ? "#e6e9ef" : differs ? "#ff5d5d" : "#4cc38a";
     for (let i = 0; i < s.pos.length; i += 3) { c.beginPath(); c.arc(px(s.pos[i]), py(s.pos[i + 1]), 5, 0, 7); c.fill(); }
-    panes[k].hash.textContent = "hash " + s.hash;
-    panes[k].hash.style.color = differs ? "var(--bad)" : "var(--ok)";
+    panes[k].hash.textContent = "substeps " + s.substeps + " · hash " + s.hash;
+    panes[k].hash.style.color = !compare ? "var(--dim)" : differs ? "var(--bad)" : "var(--ok)";
     if (k > 0) for (let i = 0; i < s.pos.length; i++) worst = Math.max(worst, Math.abs(s.pos[i] - ref.steps[frame].pos[i]));
   });
-  if (traces.length > 1) {
+  if (traces.length > 1 && !compare) {
+    $("status").innerHTML = "<span style='color:var(--dim)'>different runs side by side on purpose; hashes not compared</span>";
+  } else if (traces.length > 1) {
     const first = ref.steps.findIndex((s, i) => traces.some(o => o.steps[i] && o.steps[i].hash !== s.hash));
     $("status").innerHTML = (first < 0 ? "<span style='color:var(--ok)'>hashes match on every step</span>"
       : (frame >= first ? "<span style='color:var(--bad)'>diverged at step " + ref.steps[first].i + "</span>" : "identical so far"))

@@ -1,6 +1,6 @@
 //! The packed island buffer (layout rule 5): live nodes and live beams copied in ascending
 //! index order, beam endpoints rewritten as positions in the packed arrays. The solver
-//! (phase 1.3) will be a pure function of this buffer. Milestone 1 has one island holding everything.
+//! ([`crate::solver`]) is a pure function of this buffer. Milestone 1 has one island holding everything.
 
 use crate::real::{Real, Vec3};
 use crate::world::World;

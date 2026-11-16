@@ -57,7 +57,7 @@ World storage for milestone 1:
 | `beam_a`, `beam_b` | beam | Endpoint node indices |
 | `rest`, `rest0` | beam | Current and original rest length. Yield moves `rest`; `rest0` never changes. |
 | `compliance` | beam | One over stiffness |
-| `damping` | beam | Never below the global minimum |
+| `damping` | beam | Newton-seconds per metre. Never below the global minimum |
 | `yield_strain`, `break_strain` | beam | Failure limits |
 | `beam_flags` | beam | Alive, broken, and later cable, actuator, seam |
 | `last_lambda` | beam | Constraint force from the last substep, for the stress display and for milestone 5 |
@@ -142,13 +142,15 @@ Per 60 Hz step, per island, with `n` substeps of length `h = 1 / (60 n)`:
 
 One solver pass per substep with many substeps converges better than many passes in one step. This is the "small steps" form of XPBD.
 
-The distance correction for a beam with endpoints `a` and `b`, with `C` the current length minus rest length, `w` the sum of the two inverse masses, `α = compliance / h²` and `γ = α · damping / h`:
+The distance correction for a beam with endpoints `a` and `b`, with `C` the current length minus rest length, `w` the sum of the two inverse masses, `α = compliance / h²` and `γ = compliance · damping / h`:
 
 ```
 Δλ = (-C - γ · (direction · relative movement this substep)) / ((1 + γ) · w + α)
 ```
 
 Each endpoint moves along the beam direction by its inverse mass times `Δλ`, in opposite senses.
+
+This is the XPBD paper's `γ = α · β̃ / h` with `β̃ = h² · damping`, so a beam's damping is a physical coefficient and means the same at any substep count. (Corrected in phase 1.3: the first version read `γ = α · damping / h`, which made damping grow with the square of the substep count.)
 
 **Yield and break** are checked once per 60 Hz step, not per substep, using two strains:
 

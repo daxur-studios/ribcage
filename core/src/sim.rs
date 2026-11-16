@@ -1,37 +1,35 @@
-//! The fixed 60 Hz step and the state hash. Only add, subtract, multiply, divide on `Real`;
-//! nodes visited in ascending index order (determinism list).
+//! The fixed 60 Hz step and the state hash. The solve itself is in [`crate::solver`].
+//! Islands and nodes visited in ascending index order (determinism list).
 
 use crate::island::{build_islands, copy_back};
 use crate::real::{Real, Vec3};
+use crate::solver::{solve_island, substep_count};
 use crate::world::World;
-use crate::STEP_SECONDS;
-
-/// Placeholder substep count until the rule-based count arrives in phase 1.3.
-pub const SUBSTEPS: u32 = 4;
 
 /// Standard gravity as a per-node acceleration (a function so it can vary later).
 pub fn gravity_at(_pos: Vec3) -> Vec3 {
     Vec3::new(0.0, -9.81, 0.0)
 }
 
-/// Advances the world by one fixed step: gravity and gathered forces, then clear forces.
-pub fn step(world: &mut World) {
+/// Advances the world by one fixed step in deterministic mode: each island gets its
+/// rule-based substep count ([`substep_count`]). Returns the largest count any island used.
+pub fn step(world: &mut World) -> u32 {
+    step_inner(world, None)
+}
+
+/// Same as [`step`], but every island uses exactly `substeps`. For demos and tests that
+/// compare substep counts; not the deterministic default.
+pub fn step_with_substeps(world: &mut World, substeps: u32) -> u32 {
+    step_inner(world, Some(substeps.max(1)))
+}
+
+fn step_inner(world: &mut World, fixed: Option<u32>) -> u32 {
     let mut islands = build_islands(world);
-    let h = STEP_SECONDS / SUBSTEPS as Real;
+    let mut most = 0;
     for isl in islands.iter_mut() {
-        for _ in 0..SUBSTEPS {
-            for i in 0..isl.pos.len() {
-                let w = isl.inv_mass[i];
-                if w == 0.0 {
-                    continue;
-                }
-                // Predict: forces and gravity into velocity, then move.
-                let acc = gravity_at(isl.pos[i]) + isl.force[i] * w;
-                isl.vel[i] = isl.vel[i] + acc * h;
-                isl.pos[i] = isl.pos[i] + isl.vel[i] * h;
-            }
-            // Beam solve arrives in phase 1.3.
-        }
+        let n = fixed.unwrap_or_else(|| substep_count(isl));
+        solve_island(isl, n);
+        most = most.max(n);
     }
     for isl in &islands {
         copy_back(world, isl);
@@ -40,6 +38,7 @@ pub fn step(world: &mut World) {
         *f = Vec3::ZERO;
     }
     world.step_count += 1;
+    most
 }
 
 const FNV_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
@@ -125,10 +124,17 @@ mod tests {
 
     #[test]
     fn gravity_pulls_free_nodes_and_pinned_stay() {
-        let (w, _) = run(60, false);
+        let mut w = scene();
+        let free = w.add_node(Vec3::new(5.0, 10.0, 0.0), 1.0, 0.1).index as usize;
+        for s in 0..60 {
+            if s == 5 {
+                w.add_force(2, Vec3::new(1.0, 0.0, 0.0));
+            }
+            step(&mut w);
+        }
         assert_eq!(w.pos[0], Vec3::new(0.0, 10.0, 0.0));
-        // One second of free fall: about 0.5 g t^2 = 4.9 m.
-        let drop = 10.0 - w.pos[1].y;
+        // One second of free fall for a node on no beam: about 0.5 g t^2 = 4.9 m.
+        let drop = 10.0 - w.pos[free].y;
         assert!((drop - 4.905).abs() < 0.1, "drop was {drop}");
         assert_eq!(w.step_count, 60);
         assert_eq!(w.force[2], Vec3::ZERO);

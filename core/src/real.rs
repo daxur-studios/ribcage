@@ -49,3 +49,17 @@ impl core::ops::Mul<Real> for Vec3 {
         Vec3::new(self.x * s, self.y * s, self.z * s)
     }
 }
+
+impl core::ops::Div<Real> for Vec3 {
+    type Output = Vec3;
+    fn div(self, s: Real) -> Vec3 {
+        Vec3::new(self.x / s, self.y / s, self.z / s)
+    }
+}
+
+impl Vec3 {
+    /// Square root is correctly rounded in IEEE 754, so it is on the determinism list.
+    pub fn length(self) -> Real {
+        self.length_squared().sqrt()
+    }
+}
