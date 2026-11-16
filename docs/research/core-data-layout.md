@@ -95,7 +95,7 @@ In milestone 1 there is one island holding everything. The split into islands is
 
 In milestone 5 a node can ride on a rigid body, and the constraint then needs that body's resistance to being pushed at that point instead of the node's mass. In milestone 8, contacts push on points along a beam, which are weighted mixes of two nodes. Both are small extensions of one function if there is one function. If the distance maths is copied into the beam loop, the contact loop and the joint code, each copy must be extended and tested separately.
 
-So milestone 1 has a single `solve_distance(endpoint a, endpoint b, rest, yield stretch, compliance, damping, substep length)`. In milestone 1 an endpoint is a plain node. `rest` is passed mutably because the yield cap inside the function moves it (see Solver outline).
+So milestone 1 has a single `solve_distance(endpoint a, endpoint b, rest, yield stretch, compliance, substep length)`. In milestone 1 an endpoint is a plain node. `rest` is passed mutably because the yield cap inside the function moves it (see Solver outline). Beam damping is not part of it: it is a separate velocity pass, `damp_beam`, with the same endpoints (changed in the phase 1.5 damping fix).
 
 ### 7. One door for forces
 
@@ -137,22 +137,28 @@ Per 60 Hz step, per island, with `n` substeps of length `h = 1 / (60 n)`:
 1. For each substep:
    1. Predict: add gravity and gathered forces to velocity, save the position, move by velocity times `h`.
    2. Solve each live beam once, in order, through `solve_distance`.
-   3. Derive velocity from the change in position, then apply the movement and velocity clamps.
+   3. Derive velocity from the change in position.
+   4. Damp each live beam once, in order, through `damp_beam`.
+   5. Apply the movement and velocity clamps.
 2. After the last substep: decide break from each beam's total strain, emit the break and first-yield events. (`last_lambda` is stored per substep; yield itself happens inside the substeps.)
 
 One solver pass per substep with many substeps converges better than many passes in one step. This is the "small steps" form of XPBD.
 
-The distance correction for a beam with endpoints `a` and `b`, with `C` the current length minus rest length, `w` the sum of the two inverse masses, `α = compliance / h²` and `γ = compliance · damping / h`:
+The distance correction for a beam with endpoints `a` and `b`, with `C` the current length minus rest length, `w` the sum of the two inverse masses and `α = compliance / h²`:
 
 ```
-Δλ = (-C - γ · (direction · relative movement this substep)) / ((1 + γ) · w + α)
+Δλ = -C / (w + α)
 ```
 
-Each endpoint moves along the beam direction by its inverse mass times `Δλ`, in opposite senses.
+Each endpoint moves along the beam direction by its inverse mass times `Δλ`, in opposite senses. The force the spring carries is `-Δλ / h²`; that is `last_lambda`.
 
-This is the XPBD paper's `γ = α · β̃ / h` with `β̃ = h² · damping`, so a beam's damping is a physical coefficient and means the same at any substep count. (Corrected in phase 1.3: the first version read `γ = α · damping / h`, which made damping grow with the square of the substep count.)
+**Damping** is an implicit dashpot along the beam, applied to velocity after it is derived. With `v` the relative speed of the ends along the beam and `β = damping · h`, the pass removes `β · v / (1 + β · w)` of momentum from the pair, so the relative speed becomes `v / (1 + β · w)`. It cannot overshoot or reverse the motion at any damping, it is zero for a structure at rest, and `damping` is a physical coefficient (N·s/m) that means the same at any substep count. Its error is first order in `damping · w · h`: a critically damped test beam is about 3 to 5% off the continuous answer at 64 substeps, halving as the substeps double.
 
-**Yield** is a force cap inside the substeps, not a per-step rule. A beam's yield force is `F_y = yield_strain · rest0 / compliance`, and the force it carries is `F = -Δλ / h²`, so the correction is clamped to `|Δλ| ≤ F_y · h²` (no clamp when compliance is zero). A beam therefore never carries more than `F_y` in any substep, in tension or in compression, and the excess load goes to its neighbours in the same substep. When the clamp fires the beam yields: `rest` is set from the length the beam has after the clamped move, minus `yield_strain · rest0` in tension and plus it in compression (both ends move along the beam, so no square root is needed), and the `yielded` flag is set. The elastic stiffness never changes: the beam is stiff as before around a new rest length. `last_lambda` saturates at `F_y`. Because the cap is a force, a held load above it flows at the excess force, `(F - F_y) / m` on a lone mass, whatever the step rate or substep count (tested at 8, 16 and 32 substeps). Damping is part of `Δλ`, so it is capped along with the elastic force; a quickly loaded beam can therefore start yielding at a total strain slightly under its yield strain.
+(History: phase 1.3 put damping inside `Δλ` as the XPBD paper's `γ = α · β̃ / h`. The phase 1.5 damping fix moved it out, because the yield cap then limited spring and damper together and moved `rest` as if the spring alone were at yield: a critically damped beam knocked at 0.5 m/s yielded at a third of its yield strain. ER 001 has the measurements of the options.)
+
+**Yield** is a force cap inside the substeps, not a per-step rule. A beam's yield force is `F_y = yield_strain · rest0 / compliance`, and the force it carries is `F = -Δλ / h²`, so the correction is clamped to `|Δλ| ≤ F_y · h²` (no clamp when compliance is zero). A beam therefore never carries more than `F_y` in any substep, in tension or in compression, and the excess load goes to its neighbours in the same substep. When the clamp fires the beam yields: `rest` is set from the length the beam has after the clamped move, minus `yield_strain · rest0` in tension and plus it in compression (both ends move along the beam, so no square root is needed), and the `yielded` flag is set. The elastic stiffness never changes: the beam is stiff as before around a new rest length. `last_lambda` saturates at `F_y`. The cap is on the spring only: the damper sits beside it and is not capped, so a fast knock or a sudden load below `F_y` does not yield the beam (tested at a 0.99 `F_y` step load). Because the cap is a force, a held load above it flows: on an undamped beam at the excess force, `(F - F_y) / m` on a lone mass, whatever the step rate or substep count (tested at 8, 16 and 32 substeps); on a damped beam at the speed where the damper takes the excess, `(F - F_y) / damping`.
+
+A beam between two pinned nodes (both inverse masses zero) is never solved, so it never yields; it can still break if the pins are moved apart, since break reads only its length.
 
 **Break** is checked once per 60 Hz step, after the last substep, on total strain `(length - rest0) / rest0`. Past the break value the beam is flagged broken, in tension or compression. Measuring against the original length means a beam that has yielded a long way still reaches its break limit.
 

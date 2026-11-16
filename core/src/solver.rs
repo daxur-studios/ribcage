@@ -2,8 +2,9 @@
 //! substeps. A pure function of the packed island buffer (layout rule 5); it never reads the
 //! world arrays. One distance function for every beam (rule 6). Only add, subtract, multiply,
 //! divide and square root on `Real`, nodes and beams in ascending packed order, no fused
-//! multiply-add (determinism list). Yield is a force cap inside the substeps
-//! ([`solve_distance`]); break is checked once after the last substep ([`crate::failure`]).
+//! multiply-add (determinism list). Yield is a force cap on the spring inside the substeps
+//! ([`solve_distance`]); damping is a separate velocity pass ([`damp_beam`]); break is checked
+//! once after the last substep ([`crate::failure`]).
 //! Broken beams are not in the island, so neither the solve nor the substep rule sees them.
 //! Movement clamps arrive in 1.6.
 
@@ -58,40 +59,37 @@ pub fn substep_count(isl: &Island) -> u32 {
 }
 
 /// The one distance constraint (layout rule 6). In milestone 1 an endpoint is a plain node:
-/// `a` and `b` index `pos`, `prev` and `inv_mass`. `prev` holds positions at the start of
-/// this substep. Returns `Δλ`; each endpoint moves along the beam by its inverse mass
-/// times `Δλ`, in opposite senses.
+/// `a` and `b` index `pos` and `inv_mass`. Returns `Δλ`; each endpoint moves along the beam by
+/// its inverse mass times `Δλ`, in opposite senses.
 ///
-/// `C` is current length minus rest, `w` the sum of inverse masses, `α = compliance / h²`,
-/// and `γ = compliance · damping / h` (the XPBD paper's `α̃ β̃ / h` with `β̃ = h² · damping`),
-/// so `damping` is a physical coefficient in newton-seconds per metre and means the same
-/// thing at any substep count:
+/// `C` is current length minus rest, `w` the sum of inverse masses and `α = compliance / h²`:
 ///
-/// `Δλ = (-C - γ · (direction · relative movement this substep)) / ((1 + γ) · w + α)`
+/// `Δλ = -C / (w + α)`
 ///
-/// **Yield cap.** The beam force is `F = -Δλ / h²`. `yield_elong` is the elastic stretch at
-/// yield (`yield_strain · rest0`), so the yield force is `F_y = yield_elong / compliance` and
-/// the largest `|Δλ|` is `F_y · h²`. A larger correction is clamped to that, in either sign,
-/// so a beam never carries more than `F_y` in any substep and the excess load goes to its
-/// neighbours in the same substep. When the clamp fires the beam yields: `rest` becomes the
-/// length the beam has after the clamped move, minus `yield_elong` in tension and plus it
-/// in compression (both ends move along the beam, so that length is `len + w · Δλ`, no
-/// square root), and the function returns `true` so the caller sets the yielded flag. With
-/// zero compliance, or an infinite or NaN `yield_elong`, there is no cap. Damping is inside
-/// `Δλ`, so it is capped with the elastic part.
+/// The beam's spring force is `F = -Δλ / h²`, in newtons, positive in tension. Damping is not
+/// in here: it is a separate velocity pass after each substep ([`damp_beam`]), so this is the
+/// spring alone.
+///
+/// **Yield cap.** `yield_elong` is the elastic stretch at yield (`yield_strain · rest0`), so
+/// the yield force is `F_y = yield_elong / compliance` and the largest `|Δλ|` is `F_y · h²`. A
+/// larger correction is clamped to that, in either sign, so the spring never carries more than
+/// `F_y` in any substep and the excess load goes to its neighbours in the same substep. When
+/// the clamp fires the beam yields: `rest` becomes the length after the clamped move, minus
+/// `yield_elong` in tension and plus it in compression (both ends move along the beam, so that
+/// length is `len + w · Δλ`, no square root), and the function returns `true` so the caller
+/// sets the yielded flag. With zero compliance, or an infinite or NaN `yield_elong`, there is
+/// no cap. A beam between two pinned nodes (`w = 0`) is skipped: it carries no force and never
+/// yields, though break still reads its length.
 ///
 /// Returns `(Δλ, yielded)`.
-#[allow(clippy::too_many_arguments)]
 pub fn solve_distance(
     pos: &mut [Vec3],
-    prev: &[Vec3],
     inv_mass: &[Real],
     a: usize,
     b: usize,
     rest: &mut Real,
     yield_elong: Real,
     compliance: Real,
-    damping: Real,
     h: Real,
 ) -> (Real, bool) {
     let wa = inv_mass[a];
@@ -107,16 +105,13 @@ pub fn solve_distance(
         return (0.0, false);
     }
     let dir = d / len;
-    let c = len - *rest;
     let alpha = compliance / (h * h);
-    let gamma = compliance * damping / h;
-    let rel = (pos[b] - prev[b]) - (pos[a] - prev[a]);
-    let mut dl = (-c - gamma * dir.dot(rel)) / ((1.0 + gamma) * w + alpha);
+    let mut dl = -(len - *rest) / (w + alpha);
     let mut yielded = false;
     if compliance > 0.0 {
         let cap = yield_elong / compliance * (h * h);
         if dl < -cap {
-            dl = -cap; // tension: the beam is at its yield force
+            dl = -cap; // tension: the spring is at its yield force
             *rest = (len + w * dl) - yield_elong;
             yielded = true;
         } else if dl > cap {
@@ -130,20 +125,53 @@ pub fn solve_distance(
     (dl, yielded)
 }
 
+/// Beam damping, as a velocity pass after each substep's velocities are derived: a damper of
+/// `damping` newton-seconds per metre beside the spring, acting on the endpoints' relative
+/// speed along the beam. Implicit, so it never overshoots: the relative speed `v` becomes
+/// `v / (1 + β · w)` with `β = damping · h`, by an impulse `β · v / (1 + β · w)` shared by
+/// inverse mass. Positions are not touched.
+///
+/// Why a separate pass and not the XPBD `γ` term inside the constraint (the phase 1.3 form):
+/// with one pass per substep the `γ` term sees each substep's predicted move as speed, so a
+/// still, loaded structure carries damper force. Elastic beams hid that as extra sag; with
+/// yield capping the spring it showed as wrong forces at rest, and a damped beam yielded when
+/// spring plus damper passed `F_y`. Here a still structure has zero relative speed and zero
+/// damper force, and yield reads the spring alone (ER 001, phase 1.5 damping fix).
+pub fn damp_beam(pos: &[Vec3], vel: &mut [Vec3], inv_mass: &[Real], a: usize, b: usize, damping: Real, h: Real) {
+    let wa = inv_mass[a];
+    let wb = inv_mass[b];
+    let w = wa + wb;
+    if w == 0.0 || damping == 0.0 {
+        return;
+    }
+    let d = pos[b] - pos[a];
+    let len = d.length();
+    if len == 0.0 {
+        return;
+    }
+    let dir = d / len;
+    let v = dir.dot(vel[b] - vel[a]);
+    let beta = damping * h;
+    let j = beta * v / (1.0 + beta * w);
+    vel[a] = vel[a] + dir * (wa * j);
+    vel[b] = vel[b] - dir * (wb * j);
+}
+
 /// Advances one island by one fixed step in `n` substeps. Per substep: predict (gravity and
 /// gathered forces into velocity, move), solve every beam once in order, derive velocity
-/// from the change in position. Pinned nodes (inverse mass zero) never move. Yield happens
-/// inside the substeps (the force cap in [`solve_distance`], which sets the `YIELDED` flag).
-/// After the last substep, break is checked once and the events returned
-/// ([`check_failure`]).
+/// from the change in position, then damp every beam once in order ([`damp_beam`]). Pinned
+/// nodes (inverse mass zero) never move. Yield happens inside the substeps (the force cap in
+/// [`solve_distance`], which sets the `YIELDED` flag). After the last substep, break is
+/// checked once and the events returned ([`check_failure`]).
 ///
-/// `last_lambda` ends up holding each beam's constraint force from the last substep,
-/// `-Δλ / h²`, in newtons, positive in tension; it never exceeds the beam's yield force
-/// (zero for a beam that just broke).
+/// `last_lambda` ends up holding each beam's spring force from the last substep, `-Δλ / h²`,
+/// in newtons, positive in tension. It never exceeds the beam's yield force, and it does not
+/// include the damper (zero for a beam that just broke).
 #[allow(clippy::needless_range_loop)] // explicit ascending index order is a determinism rule
 pub fn solve_island(isl: &mut Island, n: u32) -> Vec<Event> {
     let h = STEP_SECONDS / n as Real;
     let nodes = isl.pos.len();
+    let beams = isl.beam_a.len();
     let mut prev = isl.pos.clone();
     let flags_before = isl.beam_flags.clone();
     for _ in 0..n {
@@ -157,19 +185,17 @@ pub fn solve_island(isl: &mut Island, n: u32) -> Vec<Event> {
             isl.vel[i] = isl.vel[i] + acc * h;
             isl.pos[i] = isl.pos[i] + isl.vel[i] * h;
         }
-        for k in 0..isl.beam_a.len() {
+        for k in 0..beams {
             // No original length means no strain scale, so no cap (a generator bug 1.6 guards).
             let yield_elong = if isl.rest0[k] == 0.0 { Real::INFINITY } else { isl.yield_strain[k] * isl.rest0[k] };
             let (dl, yielded) = solve_distance(
                 &mut isl.pos,
-                &prev,
                 &isl.inv_mass,
                 isl.beam_a[k] as usize,
                 isl.beam_b[k] as usize,
                 &mut isl.rest[k],
                 yield_elong,
                 isl.compliance[k],
-                isl.damping[k],
                 h,
             );
             if yielded {
@@ -182,6 +208,9 @@ pub fn solve_island(isl: &mut Island, n: u32) -> Vec<Event> {
                 continue;
             }
             isl.vel[i] = (isl.pos[i] - prev[i]) / h;
+        }
+        for k in 0..beams {
+            damp_beam(&isl.pos, &mut isl.vel, &isl.inv_mass, isl.beam_a[k] as usize, isl.beam_b[k] as usize, isl.damping[k], h);
         }
     }
     check_failure(isl, &flags_before)

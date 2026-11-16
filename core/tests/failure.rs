@@ -84,11 +84,13 @@ fn pull(w: &mut World, force: Real, loaded: u32, steps: u32) -> Vec<Event> {
 }
 
 /// Continuous-time reference for one mass on an elastic, perfectly plastic beam (stiffness
-/// `1 / C`, yield force `FY`), under a net load `ext(t)` along the beam, started at rest at zero
-/// stretch. Returns `(stretch, plastic set, speed)` at `t_end`. Symplectic Euler at 10 µs.
-fn plastic_reference(ext: impl Fn(Real) -> Real, t_end: Real) -> (Real, Real, Real) {
+/// `1 / C`, yield force `FY`) with a damper of `damping` newton-seconds per metre beside it,
+/// under a net load `ext(t)` along the beam, started at `v0` at zero stretch. The spring force is
+/// capped at `FY`; the damper force is not (Kelvin-Voigt damping on an elastic, perfectly
+/// plastic spring). Returns `(stretch, plastic set, speed)` at `t_end`. Symplectic Euler at 10 µs.
+fn plastic_reference(ext: impl Fn(Real) -> Real, damping: Real, v0: Real, t_end: Real) -> (Real, Real, Real) {
     let (k, dt) = (1.0 / C, 1e-5);
-    let (mut x, mut p, mut v) = (0.0, 0.0, 0.0);
+    let (mut x, mut p, mut v) = (0.0, 0.0, v0);
     let mut t = 0.0;
     while t < t_end {
         let mut s = k * (x - p);
@@ -99,7 +101,7 @@ fn plastic_reference(ext: impl Fn(Real) -> Real, t_end: Real) -> (Real, Real, Re
             s = -FY;
             p = x + FY / k;
         }
-        v += (ext(t) - s) / MASS * dt;
+        v += (ext(t) - s - damping * v) / MASS * dt;
         x += v * dt;
         t += dt;
     }
@@ -169,7 +171,7 @@ fn load_then_unload_leaves_a_permanent_set_with_unchanged_stiffness() {
         step_with_substeps(&mut w, SUB);
     }
     let t_load = LOADED as Real / 60.0;
-    let (_, set_ref, _) = plastic_reference(|t| if t < t_load { f } else { 0.0 }, 1.0);
+    let (_, set_ref, _) = plastic_reference(|t| if t < t_load { f } else { 0.0 }, 0.0, 0.0, 1.0);
     let set = w.rest[0] - w.rest0[0];
     assert!((set - set_ref).abs() < 0.01 * set_ref, "set {set}, reference {set_ref}");
     assert_eq!(w.rest0[0], 1.0);
@@ -189,9 +191,11 @@ fn load_then_unload_leaves_a_permanent_set_with_unchanged_stiffness() {
     assert_eq!(w.rest[0] - w.rest0[0], set, "a load below yield must not move the rest length");
 }
 
-/// Two parallel bars on one mass, with different yield forces and stiffness. The weaker bar
-/// yields first and then carries `F1` while the other takes the rest, so the pair holds any
-/// load below `F1 + F2` and collapses above it, at `(F - F1 - F2) / m`.
+/// Two parallel bars on one mass, with different yield forces and stiffness, each critically
+/// damped. The weaker bar yields first and then carries `F1` while the other takes the rest, so
+/// the pair holds any load below `F1 + F2` and collapses above it. The dampers sit beside the
+/// springs and are not capped, so the collapse runs at the speed where they take the excess,
+/// `(F - F1 - F2) / (D1 + D2)`, while the springs carry exactly `F1` and `F2`.
 #[test]
 fn parallel_bars_collapse_at_the_sum_of_their_yield_forces() {
     // Bar 1: stiffness 1/C, yield 1 %, so F1 = 36 N. Bar 2: twice as stiff, yield 1.5 %, F2 = 108 N.
@@ -235,17 +239,19 @@ fn parallel_bars_collapse_at_the_sum_of_their_yield_forces() {
     assert!((w.last_lambda[0] - f1).abs() < 0.03 * f1, "weak bar carries {}, F1 {f1}", w.last_lambda[0]);
     assert!((w.last_lambda[0] + w.last_lambda[1] - below).abs() < 1e-3 * below, "bars carry {} + {}", w.last_lambda[0], w.last_lambda[1]);
 
-    // Above the sum it collapses: both bars at their cap, the mass at the excess force.
+    // Above the sum it collapses: both springs at their cap, the dampers taking the excess.
     let above = 1.05 * (f1 + f2);
     let (w, speeds) = run(above, 600);
     assert_eq!(w.beam_flags[1] & BEAM_YIELDED, BEAM_YIELDED, "the stronger bar must have yielded");
     for (k, f) in [f1, f2].into_iter().enumerate() {
         assert!((w.last_lambda[k] - f).abs() < 1e-9 * f, "bar {k} carries {}, F_y {f}", w.last_lambda[k]);
     }
-    let a = (above - f1 - f2) / MASS;
-    for s in 400..599 {
-        let accel = (speeds[s + 1] - speeds[s]) * 60.0;
-        assert!((accel - a).abs() < 1e-6 * a, "step {s}: accelerates at {accel}, expected {a}");
+    // The two dampers act one after the other in the velocity pass, which adds `D1 D2 h` to
+    // their sum: 1.8 % here, first order in h.
+    let (d1, d2) = (2.0 * (MASS / c1).sqrt(), 2.0 * (MASS / c2).sqrt());
+    let v = (above - f1 - f2) / (d1 + d2);
+    for s in 400..600 {
+        assert!((speeds[s] - v).abs() < 0.03 * v, "step {s}: flows at {}, expected {v}", speeds[s]);
     }
 }
 
@@ -296,21 +302,154 @@ fn impact_energy_goes_into_plastic_work_in_tension_and_in_compression() {
     assert!(errors[1] < errors[0] / 3.0, "errors at 16 and 64 substeps: {errors:?}");
 }
 
+/// Damping does not count toward yield: yield is on the spring alone, so a damped beam whose
+/// stretch stays below the yield strain never yields, however fast it moves. Two cases on the
+/// critically damped beam (damper force at 0.5 m/s is 60 N, well above `F_y` = 36 N):
+/// - a knock at 0.5 m/s: even undamped it would peak at `v / ω` = 0.83 % stretch, under 1 %;
+/// - a load of 0.99 `F_y` applied at once: a critically damped step response does not
+///   overshoot, so the stretch climbs to 0.99 % and stays.
+///
+/// Neither yields, the rest length keeps its bits, and the beam ends at its elastic stretch.
+#[test]
+fn damping_does_not_count_toward_yield() {
+    // The knock.
+    let mut w = hanging(YIELD, BREAK);
+    w.vel[1] = Vec3::new(0.0, -0.5, 0.0);
+    let mut events = Vec::new();
+    for _ in 0..120 {
+        load(&mut w, -1.0, 0.0);
+        step_with_substeps(&mut w, SUB);
+        events.extend(w.events.iter().copied());
+    }
+    assert!(events.is_empty(), "knock: {events:?}");
+    assert_eq!(w.rest[0], w.rest0[0], "knock moved the rest length");
+    assert!((length(&w) - 1.0).abs() < 1e-9, "knock: length {}", length(&w));
+
+    // The sudden load, at the rule's substep count and at 64.
+    for n in [0u32, SUB] {
+        let mut w = hanging(YIELD, BREAK);
+        let f = 0.99 * FY;
+        let mut events = Vec::new();
+        for _ in 0..120 {
+            load(&mut w, -1.0, f);
+            if n == 0 {
+                step(&mut w);
+            } else {
+                step_with_substeps(&mut w, n);
+            }
+            events.extend(w.events.iter().copied());
+        }
+        assert!(events.is_empty(), "{n} substeps: {events:?}");
+        assert_eq!(w.rest[0], w.rest0[0], "{n} substeps: the rest length moved");
+        assert_eq!(w.beam_flags[0], BEAM_ALIVE);
+        let stretch = length(&w) - 1.0;
+        assert!((stretch - f * C).abs() < 1e-9, "{n} substeps: stretch {stretch}, expected {}", f * C);
+    }
+}
+
+/// Damped impact past yield: the mass is stopped by plastic work and by the damper together, so
+/// the set is smaller than the undamped law gives. No closed form; checked against the damped
+/// continuous-time reference, where the damper beside the spring is not capped.
+///
+/// Damping is a velocity pass after each substep, so its error is first order in
+/// `damping · h / m` (here 120 N·s/m, so 0.031 at 64 substeps). Measured: the set reads 4.9 %
+/// high at 64 substeps and the error halves each time the substeps double (19.4, 9.8, 4.9, 2.5,
+/// 1.3 % at 16 to 256). The test checks that law, not a loose tolerance.
+#[test]
+fn damped_impact_set_matches_the_damped_reference() {
+    let (v0, damping) = (3.0, 2.0 * MASS * OMEGA);
+    let set_at = |n: u32| {
+        let mut w = beam_world(-1.0, YIELD, NEVER, damping);
+        w.vel[1] = Vec3::new(0.0, -v0, 0.0);
+        for _ in 0..120 {
+            load(&mut w, -1.0, 0.0);
+            step_with_substeps(&mut w, n);
+        }
+        assert!(w.vel[1].length() < 1e-9, "not settled: {:?}", w.vel[1]);
+        w.rest[0] - w.rest0[0]
+    };
+    let (_, set_ref, _) = plastic_reference(|_| 0.0, damping, v0, 2.0);
+    let undamped = (0.5 * MASS * v0 * v0 - 0.5 * FY * FY * C) / FY;
+    assert!(set_ref > 0.0 && set_ref < 0.5 * undamped, "reference set {set_ref}, undamped {undamped}");
+    let (e32, e64) = (set_at(32) / set_ref - 1.0, set_at(SUB) / set_ref - 1.0);
+    assert!(e64.abs() < 0.06, "set off the reference by {e64} at {SUB} substeps");
+    let ratio = e64 / e32;
+    assert!((0.45..0.55).contains(&ratio), "error should halve from 32 to 64 substeps: {e32}, {e64}");
+}
+
+/// Tension then compression: a beam yielded one way and then the other ends with the difference
+/// of the two sets. From rest at zero elastic stretch an impact at `v` along the beam gives a set
+/// of `(m v² / 2 - F_y² C / 2) / F_y` (see the impact test), so a 3 m/s knock outward, settled,
+/// then a 2 m/s knock inward leaves `Δ(3) - Δ(2)`. Two yield flags would be one: the flag and the
+/// event come once, on the first yield.
+#[test]
+fn tension_then_compression_leaves_the_difference_of_the_sets() {
+    let delta = |v: Real| (0.5 * MASS * v * v - 0.5 * FY * FY * C) / FY;
+    let mut w = beam_world(-1.0, YIELD, NEVER, 0.0);
+    let mut events = Vec::new();
+    let mut run = |w: &mut World, v: Real| {
+        w.vel[1] = Vec3::new(0.0, v, 0.0);
+        for s in 0..600 {
+            load(w, -1.0, 0.0);
+            if s >= 60 {
+                w.add_force(1, w.vel[1] * -30.0); // drag, after the plastic flow has ended
+            }
+            step_with_substeps(w, SUB);
+            events.extend(w.events.iter().copied());
+        }
+        assert!(w.vel[1].length() < 1e-9, "not settled: {:?}", w.vel[1]);
+        assert!((length(w) - w.rest[0]).abs() < 1e-9, "length {}, rest {}", length(w), w.rest[0]);
+    };
+    run(&mut w, -3.0);
+    let after_tension = w.rest[0] - w.rest0[0];
+    assert!((after_tension - delta(3.0)).abs() < 0.01 * delta(3.0), "set {after_tension}, expected {}", delta(3.0));
+    run(&mut w, 2.0);
+    let set = w.rest[0] - w.rest0[0];
+    let expected = delta(3.0) - delta(2.0);
+    assert!((set - expected).abs() < 0.02 * expected, "set {set}, expected {expected}");
+    assert_eq!(events.len(), 1, "{events:?}");
+    assert_eq!(events[0].kind, EVENT_YIELD);
+    assert_eq!(w.beam_flags[0], BEAM_ALIVE | BEAM_YIELDED);
+}
+
+/// A beam between two pinned nodes has no mass to move, so the solver skips it: it carries no
+/// force and cannot yield. It can still break, because break reads the length, and a host that
+/// moves pinned nodes can stretch it.
+#[test]
+fn a_beam_between_pinned_nodes_breaks_but_never_yields() {
+    let mut w = World::new();
+    w.add_node(Vec3::new(0.0, 0.0, 0.0), 0.0, 0.1);
+    w.add_node(Vec3::new(0.0, -1.0, 0.0), 0.0, 0.1);
+    w.add_beam(0, 1, BeamSpec { rest: 1.0, compliance: C, damping: 0.0, yield_strain: YIELD, break_strain: BREAK });
+    w.pos[1] = Vec3::new(0.0, -1.05, 0.0); // past yield, under break
+    step(&mut w);
+    assert!(w.events.is_empty(), "{:?}", w.events);
+    assert_eq!(w.beam_flags[0], BEAM_ALIVE);
+    assert_eq!(w.last_lambda[0], 0.0);
+    w.pos[1] = Vec3::new(0.0, -1.2, 0.0); // past break
+    step(&mut w);
+    let seen: Vec<u32> = w.events.iter().map(|e| e.kind).collect();
+    assert_eq!(seen, vec![EVENT_BREAK]);
+}
+
 /// Past break: one event on the right step, the beam stops carrying load, its slot stays.
 #[test]
 fn past_break_breaks_once_and_stops_carrying_load() {
     let mut w = hanging(YIELD, BREAK);
-    // One step of a load of 40 yield forces. The beam yields at once and flows; at the end of
-    // step 1 it is far past the break strain, which the reference gives.
+    // One step of a load of 40 yield forces on the critically damped beam. The beam yields at
+    // once and flows against its yield force and its damper; at the end of step 1 it is past the
+    // break strain, which the damped reference gives.
     let f = 40.0 * FY;
     load(&mut w, -1.0, f);
     step_with_substeps(&mut w, SUB);
     let events = w.events.clone();
     assert_eq!(events.len(), 1, "{events:?}");
     assert_eq!((events[0].kind, events[0].index, events[0].step), (EVENT_BREAK, 0, 1));
-    let (x_ref, _, _) = plastic_reference(|_| f, 1.0 / 60.0);
+    let (x_ref, _, _) = plastic_reference(|_| f, 2.0 * MASS * OMEGA, 0.0, 1.0 / 60.0);
     assert!(x_ref > BREAK, "scene should break on step 1");
-    assert!((events[0].value - x_ref).abs() < 0.03 * x_ref, "break strain {}, reference {x_ref}", events[0].value);
+    // First order in damping · h, like the damped impact: measured 3.4 % high at 64 substeps,
+    // halving as the substeps double.
+    assert!((events[0].value - x_ref).abs() < 0.04 * x_ref, "break strain {}, reference {x_ref}", events[0].value);
     assert_eq!(w.beam_flags[0], BEAM_ALIVE | BEAM_YIELDED | BEAM_BROKEN);
     assert!(!w.beam_alive(0));
     assert_eq!(w.last_lambda[0], 0.0);
@@ -401,6 +540,9 @@ fn broken_beams_are_skipped_by_the_substep_rule() {
 /// (yield checked once per step, no cap) gave for this scene, recorded before the change; and
 /// the same scene with the yield strain raised out of reach (an effectively absent cap) has
 /// the same hash. The first stops anyone changing the elastic maths by accident.
+///
+/// Re-recorded once, on purpose, when damping moved out of the constraint into a velocity pass
+/// (ER 001, phase 1.5 damping fix): this scene is damped, so its trajectory changed.
 #[test]
 fn elastic_only_scenes_keep_their_hash() {
     let run = |yield_strain: Real| {
@@ -424,7 +566,7 @@ fn elastic_only_scenes_keep_their_hash() {
         assert!(w.beam_flags.iter().all(|&f| f == BEAM_ALIVE), "{:?}", w.beam_flags);
         state_hash(&w)
     };
-    assert_eq!(run(0.01), 0x0a36_1cbc_ccec_a95b, "elastic hash changed");
+    assert_eq!(run(0.01), 0x2a3b_78d7_9b64_9fc5, "elastic hash changed");
     assert_eq!(run(0.01), run(1e9));
 }
 
