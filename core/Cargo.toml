@@ -1,0 +1,8 @@
+[package]
+name = "beam-core"
+version = "0.0.1"
+edition = "2021"
+description = "Node-beam physics core: XPBD solver, no rendering or browser dependencies."
+
+[lib]
+crate-type = ["cdylib", "rlib"]

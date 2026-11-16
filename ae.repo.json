@@ -1,0 +1,9 @@
+{
+  "version": 1,
+  "capabilities": [
+    "base",
+    "docs",
+    "node-ts"
+  ],
+  "app": "node-beam-physics"
+}
