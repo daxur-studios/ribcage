@@ -23,7 +23,7 @@ All in `core/`, headless, no rendering or browser code. The [core layout rules](
 
 - [x] 1.1 Data layout: 3D nodes and beams in flat arrays, the packed island buffer, and one passing test.
 - [x] 1.2 Fixed 60 Hz step with gravity, a state hash, and the "same inputs, same hash" test.
-- [ ] 1.2b Demo tooling (half a session, no roadmap check): a trace-dump example in `core/` and one static HTML player in `demo/`, per the [demo and media plan](/docs/research/demo-and-media-plan.md). First trace: the 1.2 hash split.
+- [x] 1.2b Demo tooling (half a session, no roadmap check): a trace-dump example in `core/` and one static HTML player in `demo/`, per the [demo and media plan](/docs/research/demo-and-media-plan.md). First trace: the 1.2 hash split.
 - [ ] 1.3 XPBD beam solve with damping and a rule-based substep count.
 - [ ] 1.4 Cantilever test against the textbook deflection. Riskiest phase: the tolerance is measured here.
 - [ ] 1.5 Yield and break with break events, and their two tests.

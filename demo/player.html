@@ -1,0 +1,139 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ribcage trace player</title>
+<style>
+  :root { --bg:#0e1116; --panel:#171b22; --fg:#e6e9ef; --dim:#8a93a3; --ok:#4cc38a; --bad:#ff5d5d; --font:ui-monospace,Consolas,monospace; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg); font:14px/1.4 var(--font); }
+  header { padding:12px 16px; display:flex; gap:16px; align-items:baseline; flex-wrap:wrap; }
+  header h1 { font-size:16px; margin:0; }
+  #replay { color:var(--dim); }
+  #stage { display:grid; grid-template-columns:repeat(auto-fit,minmax(320px,1fr)); gap:12px; padding:0 16px; }
+  .pane { background:var(--panel); border-radius:8px; padding:8px; }
+  .pane h2 { font-size:13px; margin:0 0 6px; color:var(--dim); font-weight:normal; }
+  canvas { width:100%; height:auto; display:block; background:#0b0e13; border-radius:4px; }
+  .hash { margin-top:6px; letter-spacing:.5px; }
+  #bar { display:flex; gap:12px; align-items:center; padding:12px 16px; flex-wrap:wrap; }
+  #scrub { flex:1 1 240px; }
+  #status { padding:0 16px 12px; min-height:3em; font-size:16px; }
+  #load { padding:0 16px 16px; color:var(--dim); }
+  button, select { background:var(--panel); color:var(--fg); border:1px solid #2a303b; border-radius:4px; padding:4px 10px; font:inherit; }
+</style>
+</head>
+<body>
+<header>
+  <h1>ribcage trace player</h1>
+  <span id="replay">no trace loaded</span>
+</header>
+<div id="stage"></div>
+<div id="bar">
+  <button id="play">Play</button>
+  <input id="scrub" type="range" min="0" max="0" value="0">
+  <span id="stepno">step 0</span>
+  <label>speed <select id="speed"><option value="0.25">0.25x</option><option value="1" selected>1x</option><option value="2">2x</option><option value="4">4x</option></select></label>
+</div>
+<div id="status"></div>
+<div id="load">
+  Load traces: <input id="files" type="file" accept=".json" multiple>
+  (or serve the repo root, for example <code>python -m http.server</code>, and open
+  <code>demo/player.html?t=hash-split-a,hash-split-b</code> after
+  <code>cargo run -p beam-core --example trace -- hash-split</code>).
+</div>
+<script>
+"use strict";
+// One loader function: the trace body can change format later without touching the player.
+function loadTrace(text) {
+  const t = JSON.parse(text);
+  if (t.version !== 1) throw new Error("unsupported trace version " + t.version);
+  return t;
+}
+
+let traces = [], panes = [], frame = 0, playing = false, last = 0, acc = 0;
+const $ = id => document.getElementById(id);
+const W = 480, H = 320;
+
+function build() {
+  const stage = $("stage"); stage.innerHTML = ""; panes = [];
+  for (const t of traces) {
+    const d = document.createElement("div"); d.className = "pane";
+    d.innerHTML = "<h2></h2><canvas width='" + W + "' height='" + H + "'></canvas><div class='hash'></div>";
+    d.querySelector("h2").textContent = t.label;
+    stage.appendChild(d);
+    panes.push({ canvas: d.querySelector("canvas"), hash: d.querySelector(".hash") });
+  }
+  const t0 = traces[0], ms = (1000 * t0.step_seconds).toFixed(2);
+  $("replay").textContent = "replay, recorded at " + ms + " ms per step · " + t0.scenario + " · core " + t0.core_commit + " · " + t0.precision;
+  $("scrub").max = Math.min(...traces.map(t => t.steps.length)) - 1;
+  frame = 0; draw();
+}
+
+// Side view (x right, y up), fitted once to all traces so every pane shares one camera.
+function bounds() {
+  let x0 = 1e9, x1 = -1e9, y0 = 1e9, y1 = -1e9;
+  for (const t of traces) for (const s of t.steps) for (let i = 0; i < s.pos.length; i += 3) {
+    x0 = Math.min(x0, s.pos[i]); x1 = Math.max(x1, s.pos[i]);
+    y0 = Math.min(y0, s.pos[i + 1]); y1 = Math.max(y1, s.pos[i + 1]);
+  }
+  const pad = 0.5; return { x0: x0 - pad, x1: x1 + pad, y0: y0 - pad, y1: y1 + pad };
+}
+
+function draw() {
+  if (!traces.length) return;
+  const b = bounds(), sc = Math.min(W / (b.x1 - b.x0), H / (b.y1 - b.y0));
+  const px = x => (x - b.x0) * sc, py = y => H - (y - b.y0) * sc;
+  const ref = traces[0];
+  $("scrub").value = frame;
+  $("stepno").textContent = "step " + ref.steps[frame].i;
+  let worst = 0;
+  traces.forEach((t, k) => {
+    const s = t.steps[frame], c = panes[k].canvas.getContext("2d");
+    const differs = traces.some(o => o.steps[frame].hash !== s.hash);
+    c.clearRect(0, 0, W, H);
+    c.strokeStyle = "#7aa2ff"; c.lineWidth = 2;
+    for (const bm of t.beams) {
+      c.beginPath(); c.moveTo(px(s.pos[3 * bm.a]), py(s.pos[3 * bm.a + 1]));
+      c.lineTo(px(s.pos[3 * bm.b]), py(s.pos[3 * bm.b + 1])); c.stroke();
+    }
+    c.fillStyle = differs ? "#ff5d5d" : "#4cc38a";
+    for (let i = 0; i < s.pos.length; i += 3) { c.beginPath(); c.arc(px(s.pos[i]), py(s.pos[i + 1]), 5, 0, 7); c.fill(); }
+    panes[k].hash.textContent = "hash " + s.hash;
+    panes[k].hash.style.color = differs ? "var(--bad)" : "var(--ok)";
+    if (k > 0) for (let i = 0; i < s.pos.length; i++) worst = Math.max(worst, Math.abs(s.pos[i] - ref.steps[frame].pos[i]));
+  });
+  if (traces.length > 1) {
+    const first = ref.steps.findIndex((s, i) => traces.some(o => o.steps[i] && o.steps[i].hash !== s.hash));
+    $("status").innerHTML = (first < 0 ? "<span style='color:var(--ok)'>hashes match on every step</span>"
+      : (frame >= first ? "<span style='color:var(--bad)'>diverged at step " + ref.steps[first].i + "</span>" : "identical so far"))
+      + " · largest position difference now: " + worst.toExponential(2) + " m";
+  }
+}
+
+function tick(now) {
+  if (playing && traces.length) {
+    acc += (now - last) * Number($("speed").value);
+    const ms = 1000 * traces[0].step_seconds * traces[0].keep_every;
+    while (acc >= ms) { acc -= ms; frame++; if (frame > Number($("scrub").max)) { frame = 0; } }
+    draw();
+  }
+  last = now; requestAnimationFrame(tick);
+}
+
+function setTraces(list) { traces = list; build(); }
+$("play").onclick = () => { playing = !playing; $("play").textContent = playing ? "Pause" : "Play"; };
+$("scrub").oninput = e => { frame = Number(e.target.value); draw(); };
+$("files").onchange = async e => {
+  const files = [...e.target.files].sort((a, b) => a.name.localeCompare(b.name));
+  setTraces(await Promise.all(files.map(async f => loadTrace(await f.text()))));
+};
+const q = new URLSearchParams(location.search).get("t");
+if (q) {
+  Promise.all(q.split(",").map(n => fetch("../artifacts/traces/" + n + ".json").then(r => r.text()).then(loadTrace)))
+    .then(setTraces).catch(err => { $("status").textContent = "could not load: " + err.message; });
+}
+requestAnimationFrame(tick);
+</script>
+</body>
+</html>
