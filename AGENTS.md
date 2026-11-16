@@ -15,5 +15,7 @@ Repository instructions for AI coding agents.
 
 Real-time node-beam physics engine for a KSP-like building game: Rust core (`core/`, crate `beam-core`) compiled to WebAssembly, with a TypeScript host (`src/`) that Three.js reads. The design is [docs/research/node-beam-engine-design-spec.md](docs/research/node-beam-engine-design-spec.md); the work order is [Plan 001](docs/plans/001_bootstrap.md).
 
+- **Starting a session:** read, in this order, the top of [ROADMAP.md](ROADMAP.md) (what is being built, overall progress, current milestone), the current milestone's plan (first unticked phase is the next step), and the last dated section of its engineering record. Before milestone 1 work, also read the [core layout rules](docs/research/core-data-layout.md); they are binding.
+- **Finishing a phase:** run the tests, tick the phase in the plan, tick any roadmap check it proves and update the two percentages, log one engineering-record line, and commit only the files you edited. A fresh session must be able to continue from the files alone.
 - **Tests:** `cargo test` (Rust core, headless) and `pnpm test` / `pnpm typecheck` (TypeScript).
 - **Rules from the spec:** deterministic by default (fixed iteration order, no frame-time dependence, own sin/cos); no rendering or browser code in `core/`; build the debug tools and headless tests before any gameplay feature.
