@@ -2,12 +2,13 @@
 
 Repository instructions for AI coding agents.
 
-<!-- ae-managed:start id="ae-standards" sha256="72c941c534c450c41b7752ef3a50fb5fc6d151665ab62bba6b4c79a1d997e4d8" -->
+<!-- ae-managed:start id="ae-standards" sha256="3b4faa5773e78bf17c7f90ee44ee1af4bffc857afb370304acdcdf9d5251b13b" -->
 ## Æ workspace conventions
 
 - **CLI:** Use `ae` (not legacy `iae`) for worktrees (`ae wt`), environments (`ae env`), and repo checks (`ae repo check`).
 - **Plans & Engineering Records:** Pair active plans in `docs/plans/NNN_slug.md` with append-only Engineering Records in `docs/engineering-records/NNN_slug.md` (`docs/runbook/` is legacy only).
 - **Git safety:** Multiple agents may share this tree. Never run `git stash`, `git reset`, `git clean`, or `git push --force`; commit only files you edited.
+- **Public repository:** everything committed is world-readable, including docs, plans, engineering records, commit messages and history. Never commit personal details, local machine paths, emails, tokens, keys or session transcripts. Never name private repositories, products or their paths; use generic wording such as "a consuming game". Regenerable output (screenshots, renders, benchmark dumps) stays local in a gitignored `artifacts/` folder.
 <!-- ae-managed:end -->
 
 ## This repo
