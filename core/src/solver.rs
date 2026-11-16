@@ -2,15 +2,17 @@
 //! substeps. A pure function of the packed island buffer (layout rule 5); it never reads the
 //! world arrays. One distance function for every beam (rule 6). Only add, subtract, multiply,
 //! divide and square root on `Real`, nodes and beams in ascending packed order, no fused
-//! multiply-add (determinism list). Yield and break run once after the last substep
-//! ([`crate::failure`]); broken beams are not in the island, so neither the solve nor the
-//! substep rule sees them. Clamps arrive in 1.6.
+//! multiply-add (determinism list). Yield is a force cap inside the substeps
+//! ([`solve_distance`]); break is checked once after the last substep ([`crate::failure`]).
+//! Broken beams are not in the island, so neither the solve nor the substep rule sees them.
+//! Movement clamps arrive in 1.6.
 
 use crate::event::Event;
 use crate::failure::check_failure;
 use crate::island::Island;
 use crate::real::{Real, Vec3};
 use crate::sim::gravity_at;
+use crate::world::BEAM_YIELDED;
 use crate::STEP_SECONDS;
 
 /// Substep rule constant: the count is the smallest `n` with `ω_max · h ≤ SUBSTEP_C`.
@@ -66,6 +68,19 @@ pub fn substep_count(isl: &Island) -> u32 {
 /// thing at any substep count:
 ///
 /// `Δλ = (-C - γ · (direction · relative movement this substep)) / ((1 + γ) · w + α)`
+///
+/// **Yield cap.** The beam force is `F = -Δλ / h²`. `yield_elong` is the elastic stretch at
+/// yield (`yield_strain · rest0`), so the yield force is `F_y = yield_elong / compliance` and
+/// the largest `|Δλ|` is `F_y · h²`. A larger correction is clamped to that, in either sign,
+/// so a beam never carries more than `F_y` in any substep and the excess load goes to its
+/// neighbours in the same substep. When the clamp fires the beam yields: `rest` becomes the
+/// length the beam has after the clamped move, minus `yield_elong` in tension and plus it
+/// in compression (both ends move along the beam, so that length is `len + w · Δλ`, no
+/// square root), and the function returns `true` so the caller sets the yielded flag. With
+/// zero compliance, or an infinite or NaN `yield_elong`, there is no cap. Damping is inside
+/// `Δλ`, so it is capped with the elastic part.
+///
+/// Returns `(Δλ, yielded)`.
 #[allow(clippy::too_many_arguments)]
 pub fn solve_distance(
     pos: &mut [Vec3],
@@ -73,46 +88,64 @@ pub fn solve_distance(
     inv_mass: &[Real],
     a: usize,
     b: usize,
-    rest: Real,
+    rest: &mut Real,
+    yield_elong: Real,
     compliance: Real,
     damping: Real,
     h: Real,
-) -> Real {
+) -> (Real, bool) {
     let wa = inv_mass[a];
     let wb = inv_mass[b];
     let w = wa + wb;
     if w == 0.0 {
-        return 0.0;
+        return (0.0, false);
     }
     let d = pos[b] - pos[a];
     let len = d.length();
     if len == 0.0 {
         // No direction to push along. Coincident endpoints are a generator bug; 1.6 guards it.
-        return 0.0;
+        return (0.0, false);
     }
     let dir = d / len;
-    let c = len - rest;
+    let c = len - *rest;
     let alpha = compliance / (h * h);
     let gamma = compliance * damping / h;
     let rel = (pos[b] - prev[b]) - (pos[a] - prev[a]);
-    let dl = (-c - gamma * dir.dot(rel)) / ((1.0 + gamma) * w + alpha);
+    let mut dl = (-c - gamma * dir.dot(rel)) / ((1.0 + gamma) * w + alpha);
+    let mut yielded = false;
+    if compliance > 0.0 {
+        let cap = yield_elong / compliance * (h * h);
+        if dl < -cap {
+            dl = -cap; // tension: the beam is at its yield force
+            *rest = (len + w * dl) - yield_elong;
+            yielded = true;
+        } else if dl > cap {
+            dl = cap; // compression
+            *rest = (len + w * dl) + yield_elong;
+            yielded = true;
+        }
+    }
     pos[a] = pos[a] - dir * (wa * dl);
     pos[b] = pos[b] + dir * (wb * dl);
-    dl
+    (dl, yielded)
 }
 
 /// Advances one island by one fixed step in `n` substeps. Per substep: predict (gravity and
 /// gathered forces into velocity, move), solve every beam once in order, derive velocity
-/// from the change in position. Pinned nodes (inverse mass zero) never move. After the last
-/// substep, yield and break are checked once ([`check_failure`]) and the events returned.
+/// from the change in position. Pinned nodes (inverse mass zero) never move. Yield happens
+/// inside the substeps (the force cap in [`solve_distance`], which sets the `YIELDED` flag).
+/// After the last substep, break is checked once and the events returned
+/// ([`check_failure`]).
 ///
 /// `last_lambda` ends up holding each beam's constraint force from the last substep,
-/// `-Δλ / h²`, in newtons, positive in tension (zero for a beam that just broke).
+/// `-Δλ / h²`, in newtons, positive in tension; it never exceeds the beam's yield force
+/// (zero for a beam that just broke).
 #[allow(clippy::needless_range_loop)] // explicit ascending index order is a determinism rule
 pub fn solve_island(isl: &mut Island, n: u32) -> Vec<Event> {
     let h = STEP_SECONDS / n as Real;
     let nodes = isl.pos.len();
     let mut prev = isl.pos.clone();
+    let flags_before = isl.beam_flags.clone();
     for _ in 0..n {
         for i in 0..nodes {
             prev[i] = isl.pos[i];
@@ -125,17 +158,23 @@ pub fn solve_island(isl: &mut Island, n: u32) -> Vec<Event> {
             isl.pos[i] = isl.pos[i] + isl.vel[i] * h;
         }
         for k in 0..isl.beam_a.len() {
-            let dl = solve_distance(
+            // No original length means no strain scale, so no cap (a generator bug 1.6 guards).
+            let yield_elong = if isl.rest0[k] == 0.0 { Real::INFINITY } else { isl.yield_strain[k] * isl.rest0[k] };
+            let (dl, yielded) = solve_distance(
                 &mut isl.pos,
                 &prev,
                 &isl.inv_mass,
                 isl.beam_a[k] as usize,
                 isl.beam_b[k] as usize,
-                isl.rest[k],
+                &mut isl.rest[k],
+                yield_elong,
                 isl.compliance[k],
                 isl.damping[k],
                 h,
             );
+            if yielded {
+                isl.beam_flags[k] |= BEAM_YIELDED;
+            }
             isl.last_lambda[k] = -dl / (h * h);
         }
         for i in 0..nodes {
@@ -145,7 +184,7 @@ pub fn solve_island(isl: &mut Island, n: u32) -> Vec<Event> {
             isl.vel[i] = (isl.pos[i] - prev[i]) / h;
         }
     }
-    check_failure(isl)
+    check_failure(isl, &flags_before)
 }
 
 #[cfg(test)]

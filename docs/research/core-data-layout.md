@@ -95,7 +95,7 @@ In milestone 1 there is one island holding everything. The split into islands is
 
 In milestone 5 a node can ride on a rigid body, and the constraint then needs that body's resistance to being pushed at that point instead of the node's mass. In milestone 8, contacts push on points along a beam, which are weighted mixes of two nodes. Both are small extensions of one function if there is one function. If the distance maths is copied into the beam loop, the contact loop and the joint code, each copy must be extended and tested separately.
 
-So milestone 1 has a single `solve_distance(endpoint a, endpoint b, rest, compliance, damping, substep length)`. In milestone 1 an endpoint is a plain node.
+So milestone 1 has a single `solve_distance(endpoint a, endpoint b, rest, yield stretch, compliance, damping, substep length)`. In milestone 1 an endpoint is a plain node. `rest` is passed mutably because the yield cap inside the function moves it (see Solver outline).
 
 ### 7. One door for forces
 
@@ -138,7 +138,7 @@ Per 60 Hz step, per island, with `n` substeps of length `h = 1 / (60 n)`:
    1. Predict: add gravity and gathered forces to velocity, save the position, move by velocity times `h`.
    2. Solve each live beam once, in order, through `solve_distance`.
    3. Derive velocity from the change in position, then apply the movement and velocity clamps.
-2. After the last substep: update yield and break from each beam's strain, emit events, store `last_lambda`.
+2. After the last substep: decide break from each beam's total strain, emit the break and first-yield events. (`last_lambda` is stored per substep; yield itself happens inside the substeps.)
 
 One solver pass per substep with many substeps converges better than many passes in one step. This is the "small steps" form of XPBD.
 
@@ -152,12 +152,11 @@ Each endpoint moves along the beam direction by its inverse mass times `Δλ`, i
 
 This is the XPBD paper's `γ = α · β̃ / h` with `β̃ = h² · damping`, so a beam's damping is a physical coefficient and means the same at any substep count. (Corrected in phase 1.3: the first version read `γ = α · damping / h`, which made damping grow with the square of the substep count.)
 
-**Yield and break** are checked once per 60 Hz step, not per substep, using two strains:
+**Yield** is a force cap inside the substeps, not a per-step rule. A beam's yield force is `F_y = yield_strain · rest0 / compliance`, and the force it carries is `F = -Δλ / h²`, so the correction is clamped to `|Δλ| ≤ F_y · h²` (no clamp when compliance is zero). A beam therefore never carries more than `F_y` in any substep, in tension or in compression, and the excess load goes to its neighbours in the same substep. When the clamp fires the beam yields: `rest` is set from the length the beam has after the clamped move, minus `yield_strain · rest0` in tension and plus it in compression (both ends move along the beam, so no square root is needed), and the `yielded` flag is set. The elastic stiffness never changes: the beam is stiff as before around a new rest length. `last_lambda` saturates at `F_y`. Because the cap is a force, a held load above it flows at the excess force, `(F - F_y) / m` on a lone mass, whatever the step rate or substep count (tested at 8, 16 and 32 substeps). Damping is part of `Δλ`, so it is capped along with the elastic force; a quickly loaded beam can therefore start yielding at a total strain slightly under its yield strain.
 
-- **Elastic strain** `(length - rest) / rest0` decides yield. Past the yield value, `rest` moves toward the current length until the elastic strain is back at the yield value. The beam stays bent.
-- **Total strain** `(length - rest0) / rest0` decides break. Past the break value, the beam is flagged broken. Measuring against the original length means a beam that has yielded a long way still reaches its break limit.
+**Break** is checked once per 60 Hz step, after the last substep, on total strain `(length - rest0) / rest0`. Past the break value the beam is flagged broken, in tension or compression. Measuring against the original length means a beam that has yielded a long way still reaches its break limit.
 
-Both are checked in tension and in compression. Break wins: a beam that breaks gets a break event and no yield event. A yield event is sent once, the first time, and a `yielded` flag records it. Events are cleared at the start of each step and read by the host after it. Under a held load, a beam past yield is perfectly plastic: each step its rest length follows its length, so it flows until the load drops, load moves to other beams, or it breaks (measured in phase 1.5).
+Break wins: a beam that breaks in a step gets a break event and no yield event. The yield event is sent once, for a beam whose `yielded` flag was set during that step, and its `value` is the beam's total strain at the end of the step (the same quantity a break event reports). Events are cleared at the start of each step and read by the host after it, in ascending beam order within one island (islands are joined in island order first). A load held above `F_y` is not stopped by the beam: it flows until the load drops, load moves to other beams, or the beam breaks on strain. Hardening (a stiffer beam past yield) is not part of milestone 1. Known mismatch: yield is force based and break is strain based; at the rule's substep count the solver is softer than exact by about `0.4 (ω h)²`, which moves strain and so break, but not the yield force of a statically determinate structure.
 
 **Substep count.** For each beam, `ω = sqrt(stiffness · (inverse mass a + inverse mass b))`. The island's count is the smallest `n` with `ω_max · h ≤ c`, clamped to a minimum and maximum.
 

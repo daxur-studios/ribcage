@@ -81,7 +81,10 @@ fn cantilever() -> World {
 
 /// A 1 m beam hanging from a pinned node under a 1 kg mass, critically damped, with a rubbery
 /// 4% yield and 15% break strain so the stretch is visible on screen. Natural frequency 60 rad/s,
-/// so the beam settles within each 60 Hz step and a slow load ramp is quasi-static.
+/// critically damped. It does not settle within one 60 Hz step (a critically damped response
+/// after `ω t` = 1 has covered `1 - 2/e` = 26% of the way: 0.79% strain of a 3% load), so the numbers in the snap
+/// demo are dynamic results of a slow load ramp, not static readings. Its yield force is
+/// `0.04 / compliance` = 144 N; a load above that flows at `(F - 144 N) / 1 kg`.
 fn hanging_beam() -> World {
     let mut w = World::new();
     let omega: Real = 60.0;
@@ -325,9 +328,10 @@ fn main() {
         }
         "snap" => {
             // The same hanging beam under three slowly growing pulls (120 steps up, 120 down, then
-            // rest): one that stays below the yield strain, one that barely passes it, and one
-            // that keeps growing. Under a held load a yielded beam flows every step (perfectly
-            // plastic: the rest length follows the length), so it snaps if the load stays.
+            // rest): one that stays below its yield force, one that rises just past it and comes
+            // back, and one that keeps growing. A beam carries at most its yield force, so any
+            // load held above it makes the mass accelerate at the excess force until the beam
+            // snaps; only a brief excess leaves a small permanent set.
             let ramp = |peak: Real, down: bool| -> &'static dyn Fn(&mut World, u32) {
                 Box::leak(Box::new(move |w: &mut World, s: u32| {
                     let rising = s.min(120) as Real / 120.0;
@@ -343,7 +347,7 @@ fn main() {
                 }))
             };
             out.push((format!("{scenario}-a"), record(scenario, &run("springs back: load peaks at 3% strain", 300, Substeps::Rule, "none", ramp(0.03, true)), hanging_beam(), every)));
-            out.push((format!("{scenario}-b"), record(scenario, &run("stays bent: load peaks at 4.5% strain", 300, Substeps::Rule, "none", ramp(0.045, true)), hanging_beam(), every)));
+            out.push((format!("{scenario}-b"), record(scenario, &run("stays bent: load peaks at 4.1% strain", 300, Substeps::Rule, "none", ramp(0.041, true)), hanging_beam(), every)));
             out.push((format!("{scenario}-c"), record(scenario, &run("snaps: load keeps growing", 300, Substeps::Rule, "none", ramp(0.06, false)), hanging_beam(), every)));
         }
         _ => unreachable!(),

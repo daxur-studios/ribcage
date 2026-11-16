@@ -1,27 +1,29 @@
-//! Yield and break (layout rules, "Yield and break"), checked once per 60 Hz step after the
-//! last substep, on the packed island buffer. Two strains:
+//! Break (layout rules, "Yield and break"), checked once per 60 Hz step after the last
+//! substep, on the packed island buffer. Yield is not checked here: it is a force cap inside
+//! the substeps ([`crate::solver::solve_distance`]), which moves `rest` and sets the `YIELDED`
+//! flag. This module turns that flag into an event and decides break.
 //!
-//! - elastic strain `(length - rest) / rest0` decides yield: past the yield value `rest` moves
-//!   toward the current length until the elastic strain is back at the yield value (the beam
-//!   stays bent);
-//! - total strain `(length - rest0) / rest0` decides break: past the break value the beam is
-//!   flagged broken. Measured against the original length, so a beam that yielded a long way
-//!   still reaches its break limit.
+//! - Break: total strain `(length - rest0) / rest0` past the break value flags the beam broken,
+//!   in tension and in compression. Measured against the original length, so a beam that
+//!   yielded a long way still reaches its break limit.
+//! - Yield event: sent once, for a beam whose `YIELDED` flag was set during this step
+//!   (`flags_before` is the flags at the start of the step). Its `value` is the beam's total
+//!   strain at the end of the step, the same quantity a break event reports.
+//! - Break wins: a beam that breaks gets a break event and no yield event (its `YIELDED` flag
+//!   stays set).
 //!
-//! Both are checked in tension and in compression. Break wins: a beam that breaks gets a break
-//! event and no yield event. A yield event is sent once, the first time; the `YIELDED` flag
-//! (part of the state hash) records it. Beams are visited in ascending packed order, which is
-//! ascending world order, so events come out in ascending beam order.
+//! Beams are visited in ascending packed order, which is ascending world order, so events
+//! come out in ascending beam order within the island; the world joins islands in island order.
 
 use crate::event::{Event, EVENT_BREAK, EVENT_YIELD};
 use crate::island::Island;
 use crate::real::Real;
 use crate::world::{BEAM_BROKEN, BEAM_YIELDED};
 
-/// Updates yield and break for every live beam of the island and returns the events, with
-/// `step` left at zero for the caller to stamp.
+/// Decides break for every live beam of the island, reports newly yielded beams, and returns
+/// the events, with `step` left at zero for the caller to stamp.
 #[allow(clippy::needless_range_loop)] // explicit ascending index order is a determinism rule
-pub fn check_failure(isl: &mut Island) -> Vec<Event> {
+pub fn check_failure(isl: &mut Island, flags_before: &[u32]) -> Vec<Event> {
     let mut events = Vec::new();
     for k in 0..isl.beam_a.len() {
         let r0 = isl.rest0[k];
@@ -37,14 +39,9 @@ pub fn check_failure(isl: &mut Island) -> Vec<Event> {
             events.push(Event { kind: EVENT_BREAK, index, step: 0, value: total });
             continue;
         }
-        let elastic: Real = (len - isl.rest[k]) / r0;
-        let limit = isl.yield_strain[k];
-        if elastic.abs() > limit {
-            isl.rest[k] = if elastic > 0.0 { len - limit * r0 } else { len + limit * r0 };
-            if isl.beam_flags[k] & BEAM_YIELDED == 0 {
-                isl.beam_flags[k] |= BEAM_YIELDED;
-                events.push(Event { kind: EVENT_YIELD, index, step: 0, value: elastic });
-            }
+        let newly = isl.beam_flags[k] & BEAM_YIELDED != 0 && flags_before[k] & BEAM_YIELDED == 0;
+        if newly {
+            events.push(Event { kind: EVENT_YIELD, index, step: 0, value: total });
         }
     }
     events

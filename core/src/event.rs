@@ -5,14 +5,15 @@
 
 use crate::real::Real;
 
-/// A beam's elastic strain first passed its yield value; its rest length started to move.
+/// A beam first reached its yield force; its rest length started to move.
 pub const EVENT_YIELD: u32 = 1;
 /// A beam's total strain passed its break value; it is now flagged broken.
 pub const EVENT_BREAK: u32 = 2;
 
 /// One event. `index` is a world index (a beam for yield and break), never a packed one.
 /// `step` is the world's step count after the step that produced the event. `value` is the
-/// strain that triggered it: elastic strain for a yield, total strain for a break.
+/// beam's total strain `(length - rest0) / rest0` at the end of that step, for a yield and a
+/// break alike.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Event {

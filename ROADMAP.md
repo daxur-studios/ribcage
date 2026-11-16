@@ -61,7 +61,7 @@ Planning has two stages. The costly-to-redo milestones (5 and 8) have an early d
 - [x] Nodes and beams live in flat arrays and step at a fixed 60 Hz.
 - [x] The same inputs give an identical state hash on every run.
 - [x] A cantilever's tip deflection matches the textbook formula within a stated tolerance. (Within 2% with enough substeps; at the rule's count softer by a measured `0.4 · c²`, see ER 001, phase 1.4.)
-- [x] A beam loaded below yield returns to rest; past yield it stays bent; past break it is removed and reports an event. (Tests in `core/tests/failure.rs`; see ER 001, phase 1.5.)
+- [x] A beam loaded below yield returns to rest; past its yield force it stays bent and carries no more; past break it is flagged broken (it keeps its slot and stops carrying load) and reports an event. (Tests in `core/tests/failure.rs`; see ER 001, phase 1.5.)
 - [ ] A resting structure gains no energy over ten simulated minutes.
 - [ ] A bad number freezes the structure and reports, instead of spreading.
 - [ ] A benchmark scene reports beams, substeps and milliseconds per step.
