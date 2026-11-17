@@ -1,6 +1,6 @@
 # ribcage roadmap
 
-**TL;DR.** Overall progress: **16%**. Now: milestone 1 (solver core and tools) is complete; milestone 2 (2D bridge builder) is in progress (phase 2.2 of 4 done). First playable slice ends at milestone 4.
+**TL;DR.** Overall progress: **20%**. Now: milestone 1 (solver core and tools) is complete; milestone 2 (2D bridge builder) is in progress (phase 2.3 of 4 done). First playable slice ends at milestone 4.
 
 This page is the single answer to "what are we building, and how far along is it?". The design is the [spec](docs/research/node-beam-engine-design-spec.md). The detailed work for the current milestone lives in its plan.
 
@@ -20,7 +20,7 @@ Each milestone has a weight (its share of the whole) and a short list of checks.
 | --- | --- | --- | --- | --- |
 | 0 | Scaffold | 2 | 100% | done |
 | 1 | Solver core and tools | 12 | 100% | done |
-| 2 | 2D bridge builder | 8 | 20% | **in progress** |
+| 2 | 2D bridge builder | 8 | 80% | **in progress** |
 | 3 | 3D on terrain in Three.js | 10 | 0% | |
 | 4 | Parts and assembly (first playable slice) | 12 | 0% | |
 | 5 | Rigid by default | 16 | 0% | |
@@ -28,7 +28,7 @@ Each milestone has a weight (its share of the whole) and a short list of checks.
 | 7 | Ground and water | 10 | 0% | |
 | 8 | Craft-against-craft collision and threads | 12 | 0% | |
 | 9 | Visual layer | 8 | 0% | |
-| | **Overall** | **100** | **16%** | |
+| | **Overall** | **100** | **20%** | |
 
 ## Who plans and builds what
 
@@ -68,10 +68,10 @@ Planning has two stages. The costly-to-redo milestones (5 and 8) have an early d
 
 ### 2. 2D bridge builder ([Plan 002](docs/plans/002_bridge_builder.md))
 
-- [ ] The core runs in the browser as WebAssembly, stepped from TypeScript. (Phase 2.1: runs in Node with native-identical hashes, `src/core.ts`; ticked when the editor page loads it.)
-- [ ] You can place nodes and beams, press run, and pause, single-step and slow down time.
-- [x] A load rolls across the bridge and an under-built bridge breaks. (Headless, through the command buffer: `test/bridge.test.ts`; a strong truss carries the truck with no yield, a tenth as stiff yields then breaks; see ER 002, phase 2.2. Seen in the editor in 2.3.)
-- [ ] Beams are coloured by stress.
+- [x] The core runs in the browser as WebAssembly, stepped from TypeScript. (The editor page loads it: `pnpm build:web`, then `pnpm serve`. In the browser the reported 11,136-beam scene ends at the native hash, 6.6 ms per step; see ER 002, phase 2.3.)
+- [x] You can place nodes and beams, press run, and pause, single-step and slow down time. (`web/editor.ts`: node, beam, pin and delete tools, run, pause, step and five speeds; checked by hand in the browser, see ER 002, phase 2.3.)
+- [x] A load rolls across the bridge and an under-built bridge breaks. (Headless, through the command buffer: `test/bridge.test.ts`; a strong truss carries the truck with no yield, a tenth as stiff yields then breaks; see ER 002, phase 2.2. Seen in the editor in 2.3: the same truss runs there and ends at the same hash as in Node.)
+- [x] Beams are coloured by stress. (Blue in compression through grey to red at yield, purple once bent past yield, dashed when broken; `web/editor.ts`.)
 - [ ] A recorded run replays exactly.
 
 ### 3. 3D on terrain in Three.js

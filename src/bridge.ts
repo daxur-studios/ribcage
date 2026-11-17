@@ -14,12 +14,15 @@
  */
 
 import type { CommandBatch } from './commands.ts';
+import {
+  compileDesign,
+  rollLoad,
+  type Deck,
+  type Design,
+  type Truck,
+} from './design.ts';
 
-/** Standard gravity, for the weight of the rolling load. */
-export const GRAVITY = 9.81;
-
-/** Fixed step in seconds (60 Hz). */
-export const STEP_SECONDS = 1 / 60;
+export { GRAVITY, STANDARD_TRUCK, STEP_SECONDS, truckPosition, type Truck } from './design.ts';
 
 export interface BridgeSpec {
   /** Bays along the span. */
@@ -56,15 +59,6 @@ export const STRONG_BRIDGE: BridgeSpec = {
 /** The same bridge with beams a tenth as stiff and strong (2e7 against 2e8): yields under the truck and breaks. */
 export const WEAK_BRIDGE: BridgeSpec = { ...STRONG_BRIDGE, ea: 2e7 };
 
-export interface Truck {
-  /** Mass in kilograms (only its weight acts on the bridge: a point load, no inertia). */
-  mass: number;
-  /** Speed in metres per second along the deck. */
-  speed: number;
-}
-
-export const STANDARD_TRUCK: Truck = { mass: 3000, speed: 4 };
-
 export interface BridgeLayout {
   spec: BridgeSpec;
   /** Deck nodes (the bottom chord), left to right. The first and last are the pinned supports. */
@@ -77,69 +71,45 @@ export interface BridgeLayout {
   span: number;
 }
 
+/** The truss as a design: deck nodes, then top nodes, then bottom chord, top chord and diagonals. */
+export function bridgeDesign(spec: BridgeSpec): Design {
+  const { bays, bayLength: L, depth: H } = spec;
+  const nodes: Design['nodes'] = [];
+  for (let i = 0; i <= bays; i++) nodes.push({ x: i * L, y: 0, pinned: i === 0 || i === bays });
+  for (let i = 0; i < bays; i++) nodes.push({ x: (i + 0.5) * L, y: H, pinned: false });
+  const deck = (i: number): number => i;
+  const top = (i: number): number => bays + 1 + i;
+  const beams: Design['beams'] = [];
+  for (let i = 0; i < bays; i++) beams.push({ a: deck(i), b: deck(i + 1) });
+  for (let i = 0; i + 1 < bays; i++) beams.push({ a: top(i), b: top(i + 1) });
+  for (let i = 0; i < bays; i++) {
+    beams.push({ a: deck(i), b: top(i) });
+    beams.push({ a: top(i), b: deck(i + 1) });
+  }
+  return { nodes, beams };
+}
+
 /**
  * Appends the commands that build the bridge to `batch`. The node and beam indices are those the
- * world will hand out when the batch is applied to an **empty** world, in order; `applyBridge`
- * in the tests checks that against the results.
+ * world will hand out when the batch is applied to an **empty** world, in order; the tests check
+ * that against the results.
  */
 export function buildBridge(batch: CommandBatch, spec: BridgeSpec): BridgeLayout {
-  const { bays, bayLength: L, depth: H } = spec;
-  const invMass = 1 / spec.nodeMass;
-  const deck: number[] = [];
-  const top: number[] = [];
-  let next = 0; // the index the world will give the next node, for a fresh world
-  for (let i = 0; i <= bays; i++) {
-    const pinned = i === 0 || i === bays;
-    batch.addNode(i * L, 0, 0, pinned ? 0 : invMass, spec.radius);
-    deck.push(next++);
-  }
-  for (let i = 0; i < bays; i++) {
-    batch.addNode((i + 0.5) * L, H, 0, invMass, spec.radius);
-    top.push(next++);
-  }
-
-  const beams: number[] = [];
-  let nextBeam = 0;
-  const beam = (a: number, b: number, ax: number, ay: number, bx: number, by: number): void => {
-    // sqrt is exactly rounded everywhere; Math.hypot is not, and engines differ.
-    const rest = Math.sqrt((bx - ax) * (bx - ax) + (by - ay) * (by - ay));
-    batch.addBeam(a, b, {
-      rest,
-      compliance: rest / spec.ea,
-      damping: spec.damping,
-      yieldStrain: spec.yieldStrain,
-      breakStrain: spec.breakStrain,
-    });
-    beams.push(nextBeam++);
-  };
-  // Bottom chord, top chord, then the diagonals up and down in every bay.
-  for (let i = 0; i < bays; i++) beam(deck[i]!, deck[i + 1]!, i * L, 0, (i + 1) * L, 0);
-  for (let i = 0; i + 1 < bays; i++) beam(top[i]!, top[i + 1]!, (i + 0.5) * L, H, (i + 1.5) * L, H);
-  for (let i = 0; i < bays; i++) {
-    beam(deck[i]!, top[i]!, i * L, 0, (i + 0.5) * L, H);
-    beam(top[i]!, deck[i + 1]!, (i + 0.5) * L, H, (i + 1) * L, 0);
-  }
+  const design = bridgeDesign(spec);
+  compileDesign(batch, design, spec);
+  const { bays, bayLength: L } = spec;
+  const deck = Array.from({ length: bays + 1 }, (_, i) => i);
+  const top = Array.from({ length: bays }, (_, i) => bays + 1 + i);
+  const beams = design.beams.map((_, i) => i);
   return { spec, deck, top, beams, span: bays * L };
 }
 
-/** Where the truck is, in metres from the left support, at the start of step `step` (0-based). */
-export function truckPosition(truck: Truck, step: number): number {
-  return truck.speed * step * STEP_SECONDS;
-}
-
 /**
- * Appends the force commands for the truck's weight during step `step`: split between the two
- * deck nodes either side of it (a simply supported deck between nodes). Nothing once it has left
- * the bridge. Returns whether the truck is still on the bridge.
+ * Appends the force commands for the truck's weight during step `step` (see `rollLoad`).
+ * Returns whether the truck is still on the bridge.
  */
 export function rollTruck(batch: CommandBatch, layout: BridgeLayout, truck: Truck, step: number): boolean {
-  const x = truckPosition(truck, step);
   const L = layout.spec.bayLength;
-  if (x < 0 || x > layout.span) return false;
-  const bay = Math.min(Math.floor(x / L), layout.spec.bays - 1);
-  const t = (x - bay * L) / L; // 0 at the left node of the bay, 1 at the right
-  const w = truck.mass * GRAVITY;
-  batch.addForce(layout.deck[bay]!, 0, -w * (1 - t), 0);
-  batch.addForce(layout.deck[bay + 1]!, 0, -w * t, 0);
-  return true;
+  const deck: Deck = { ids: layout.deck, xs: layout.deck.map((_, i) => i * L) };
+  return rollLoad(batch, deck, truck, step);
 }
