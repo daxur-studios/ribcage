@@ -41,7 +41,7 @@ Order: 4.1 → 4.2 → 4.3 → 4.4 → 4.5. Phase 4.6 (the core) can run side by
 
 Roadmap checks: "generated from parameters" in 4.3; "join at rings, saved and loaded" in 4.5; "lifts off" in 4.7 (headless), seen in 4.9; "test of fun" when 4.8's bands pass and the snap is seen on the page in 4.9, whichever comes second. Each check is a quarter of the milestone.
 
-- [ ] **4.1 Materials and the part data model.** Build with: Sonnet.
+- [x] **4.1 Materials and the part data model.** Build with: Sonnet.
   `src/parts/material.ts`: the three materials from ER 004 and the scale `s`; a member from a material and a cross-section area gives `EA = s·E·A`, the yield and break strains, and damping from a damping ratio (`c = ζ · 2 · sqrt(k · m_a·m_b / (m_a + m_b))`, `k = EA / L`). `src/parts/part.ts`: the part shape from "Settled" above, a `compilePart` to commands (reusing the `compileStruct` pattern), a mass total, and a budget check that reports the substep count the core's rule will pick for a part (the same `ω·h ≤ c` sum, in TypeScript) and the node-mass ratio. Also adds the plan link to the roadmap's milestone 4 heading (mechanical).
   **Test:** a single steel strut and a single aluminium strut, pulled in the core, yield at `σ_y · A` within 1% and break at their stated strain, in tension and in compression; the reported substep count equals what the core uses on a small test lattice; damping from `ζ` on a two-node spring decays at the expected rate within 5%.
   Demo: skip (nothing to see yet).

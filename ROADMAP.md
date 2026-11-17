@@ -1,6 +1,6 @@
 # ribcage roadmap
 
-**TL;DR.** Overall progress: **32%**. Now: milestones 1 (solver core and tools), 2 (2D bridge builder) are complete, and so is milestone 3 (3D on terrain in Three.js): terrain, ground contact, a tower and a bridge that stand and collapse, the Three.js page with time controls, record and replay and panels skinned to the nodes (see [Plan 003](docs/plans/003_terrain_3d.md)). Next is milestone 4 (parts and assembly), which needs its plan first. First playable slice ends at milestone 4.
+**TL;DR.** Overall progress: **32%**. Now: milestones 1 (solver core and tools), 2 (2D bridge builder) are complete, and so is milestone 3 (3D on terrain in Three.js): terrain, ground contact, a tower and a bridge that stand and collapse, the Three.js page with time controls, record and replay and panels skinned to the nodes (see [Plan 003](docs/plans/003_terrain_3d.md)). Now building milestone 4 (parts and assembly), planned in [Plan 004](docs/plans/004_parts_and_assembly.md). First playable slice ends at milestone 4.
 
 This page is the single answer to "what are we building, and how far along is it?". The design is the [spec](docs/research/node-beam-engine-design-spec.md). The detailed work for the current milestone lives in its plan.
 
@@ -81,7 +81,7 @@ Planning has two stages. The costly-to-redo milestones (5 and 8) have an early d
 - [x] Meshes are skinned to the nodes and bend with them. (`src/skin.ts`, `src/panels3d.ts`, `test/skin.test.ts`: floor, wall and deck panels bound to four nodes of their cell, exact for rotation, movement and stretch, and the shader's 32-bit maths agrees with the reference; seen on the page under WebGPU and WebGL 2: the panels tilt and fall with the knocked tower and sag with the overloaded bridge; see ER 003, phase 3.8.)
 - [x] The stress colours and time controls work in 3D. (Pause, single step, five speeds measured against their step rates, click-to-knock, the three action buttons; beams go from blue and grey to red and purple as load builds; `web/viewer3d.ts`, `test/live3d.test.ts`; see ER 003, phase 3.6.)
 
-### 4. Parts and assembly (first playable slice)
+### 4. Parts and assembly (first playable slice) ([Plan 004](docs/plans/004_parts_and_assembly.md))
 
 - [ ] Tank, truss, landing leg, engine and pod are generated from parameters.
 - [ ] Parts join at attachment rings into one craft, saved and loaded as a craft file.
