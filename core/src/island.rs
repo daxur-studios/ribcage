@@ -36,6 +36,11 @@ pub struct Island {
     pub contact_node: Vec<u32>,
     pub contact_normal: Vec<Vec3>,
     pub contact_offset: Vec<Real>,
+    // Beam-midpoint ground contacts (phase 3.3): packed beam index in ascending order, and the
+    // plane under the beam's midpoint at the step's start.
+    pub beam_contact: Vec<u32>,
+    pub beam_contact_normal: Vec<Vec3>,
+    pub beam_contact_offset: Vec<Real>,
     /// The ground's friction coefficient `μ` for this step's contacts.
     pub friction: Real,
 }

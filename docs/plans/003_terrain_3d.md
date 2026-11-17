@@ -46,7 +46,7 @@ Order: 3.1 → 3.2 → 3.3 → 3.4 → 3.5, then 3.6 and 3.8 can run side by sid
   **Test** (`core/tests/ground.rs`): a dropped node lands at `radius` above flat ground without bounce or sinking (within 1 mm) and stays there; a node spawned 0.5 m deep rises at no more than 2 m/s; a small lattice cube on a slope stays put (drift under 1 mm in 10 s) when `tan θ < μ` and slides with acceleration `g (sin θ − μ cos θ)` within 5% when `tan θ > μ`; a structure resting on the ground for ten simulated minutes gains no energy (as `core/tests/energy.rs`) and does not creep; the benchmark hash and the golden recording are unchanged; a small terrain scene hashes the same natively and in WebAssembly.
   Demo: a cube sticking on a gentle slope beside one sliding on a steep one, from a trace (the 1.2b player is enough).
 
-- [ ] **3.3 Beam midpoints on the ground.** Build with: Sonnet.
+- [x] **3.3 Beam midpoints on the ground.** Build with: Sonnet.
   The weighted endpoint: a point `b_a · p_a + b_b · p_b` whose resistance to a push is `b_a²·w_a + b_b²·w_b`, each node moving by `b_i · w_i · Δλ` (the kernel from 3.2 takes it; no second copy of the maths). Each live beam's midpoint (weights ½, ½) is checked against the ground like a node, with the smaller of its two end radii, after all node contacts in the list (ascending beam order).
   **Test:** a long beam dropped across a one-cell ridge rests on the ridge instead of passing through it; a beam dropped flat on flat ground lands level (its two ends within 1 mm of each other in height) and its total momentum change matches the ground impulse; 3.2's tests still pass.
   Demo: skip, or the ridge drop if it is quick.

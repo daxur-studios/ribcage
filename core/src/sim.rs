@@ -30,6 +30,8 @@ pub struct StepStats {
     pub beam_solves: u64,
     /// Ground contacts found this step, over all solved islands (each is solved every substep).
     pub contacts: u32,
+    /// Beam-midpoint ground contacts found this step (phase 3.3), counted the same way.
+    pub beam_contacts: u32,
 }
 
 /// Same as [`step`] with an explicit substep rule, and a report. `SubstepRule::DEFAULT` is
@@ -83,6 +85,7 @@ fn step_inner(world: &mut World, choice: Choice) -> StepStats {
         stats.max_substeps = stats.max_substeps.max(n);
         stats.beam_solves += n as u64 * isl.beam_a.len() as u64;
         stats.contacts += isl.contact_node.len() as u32;
+        stats.beam_contacts += isl.beam_contact.len() as u32;
     }
     for isl in islands.iter().filter(|isl| !isl.skipped) {
         copy_back(world, isl);

@@ -146,7 +146,9 @@ fn terrain_through_the_boundary_matches_the_direct_world() {
 /// 10 kg nodes dropped onto the bumps, a node spawned under a slope, and a node spawned under
 /// the ground past the grid's corner (the flat edge rule). Covers landing, friction on a slope
 /// and recovery from overlap. The same records are built in `test/wasm.test.ts`.
-pub const TERRAIN_SCENE_120: u64 = 0x05e2_e896_a698_c2f5;
+/// Re-recorded in phase 3.3, when the triangle's beams gained midpoint contacts (it was
+/// `0x05e2e896a698c2f5` with node contacts alone).
+pub const TERRAIN_SCENE_120: u64 = 0x2bde_f035_f12d_0c86;
 
 fn terrain_scene_commands() -> Vec<Command> {
     let rec = |kind, a, b, f| Command { kind, a, b, reserved: 0, f };

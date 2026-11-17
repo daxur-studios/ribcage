@@ -11,7 +11,7 @@ const HAND_BUILT_30 = 0xb62c7e7dd415f3a1n;
 /** A 5 by 4 terrain with heights `(k % 7) * 0.5`, one step (`TERRAIN_ONLY` in core/tests/ffi.rs). */
 const TERRAIN_ONLY = 0x424288d9b2e8abb4n;
 /** That terrain with a triangle and two lone nodes on it, after 120 steps (`TERRAIN_SCENE_120` in core/tests/ffi.rs). */
-const TERRAIN_SCENE_120 = 0x05e2e896a698c2f5n;
+const TERRAIN_SCENE_120 = 0x2bdef035f12d0c86n;
 /** End hash of the reported scene after 720 steps at the default rule (`cargo run --release -p beam-core --example bench`). */
 const STANDARD_BENCH_720 = 0x871092299f3cea56n;
 
