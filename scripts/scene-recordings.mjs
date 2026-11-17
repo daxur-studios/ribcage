@@ -16,7 +16,7 @@ const { World } = await src('world.ts');
 const { CommandBatch } = await src('commands.ts');
 const { Recorder, encodeRecording } = await src('recording.ts');
 const { STANDARD_TRUCK } = await src('bridge.ts');
-const { buildTower, buildBridge3, towerAction, bridgeAction } = await src('scenes3d.ts');
+const { buildTower, buildBridge3, towerAction, bridgeAction, newRides } = await src('scenes3d.ts');
 
 const wasm = join(root, 'target', 'wasm32-unknown-unknown', 'release', 'beam_core.wasm');
 const core = await Core.load(new Uint8Array(readFileSync(wasm)));
@@ -43,11 +43,12 @@ for (const [scene, action] of runs) {
   let sum = 0;
   let worst = 0;
   let sub = 0;
+  const rides = newRides();
   for (let s = 0; s < steps; s++) {
     const b = new CommandBatch();
     if (scene === 'tower') {
       if (action) towerAction(b, layout, action, s);
-    } else bridgeAction(b, layout, action, s, STANDARD_TRUCK);
+    } else bridgeAction(b, layout, action, s, STANDARD_TRUCK, rides, world.positions());
     const t = performance.now();
     sub = Math.max(sub, rec.step(b));
     const ms = performance.now() - t;

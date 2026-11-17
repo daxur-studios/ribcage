@@ -273,8 +273,35 @@ export function buildBridge3(batch: CommandBatch, spec: BridgeSpec3 = STANDARD_B
   return { spec, terrain, rail, ...layout };
 }
 
-/** A truck weighing 200 t at the standard speed: far past what the bridge carries. */
-export const HEAVY_TRUCK: Truck = { mass: 200000, speed: 4 };
+/**
+ * The overload truck: 50 t at the standard speed. Measured with `scripts/truck-capacity.mjs`: the
+ * lightest truck that breaks a beam is about 49 t, and at 50 t the first beam breaks with the truck
+ * at the middle of the span (x = 11.9 m of 24). Heavier trucks break the bridge earlier along the
+ * span (200 t at 2.9 m, as the first version had it).
+ */
+export const HEAVY_TRUCK: Truck = { mass: 50000, speed: 4 };
+
+/**
+ * How far a deck node under a truck may sink below its rest height before the truck has lost its
+ * footing and falls with the deck. A truck is a load, not a body: without this, its weight would
+ * keep pressing on the nodes it was rolling along after the bridge below it has gone.
+ */
+export const TRUCK_SINK_LIMIT = 0.5;
+
+/** Where a truck was when it lost its footing: the step of its own clock, and where. */
+export interface TruckRide {
+  fell: { k: number; x: number; y: number; z: number } | null;
+}
+
+/** The two trucks' rides of one run (the standard truck and the heavy one). */
+export interface BridgeRides {
+  light: TruckRide;
+  heavy: TruckRide;
+}
+
+export function newRides(): BridgeRides {
+  return { light: { fell: null }, heavy: { fell: null } };
+}
 
 /** Newtons of sideways knock on the middle of the deck, along `+z`. */
 export const BRIDGE_KNOCK_FORCE = 2e5;
@@ -285,9 +312,37 @@ export const BRIDGE_KNOCK_SECONDS = 0.5;
  * trusses, two nodes along each), as `design.ts`'s `rollLoad` does for one truss. Returns
  * whether the truck is still on the deck.
  */
-export function rollTruck3(batch: CommandBatch, layout: BridgeLayout3, truck: Truck, step: number): boolean {
+export function rollTruck3(
+  batch: CommandBatch,
+  layout: BridgeLayout3,
+  truck: Truck,
+  step: number,
+  ride?: TruckRide,
+  positions?: ArrayLike<number>,
+): boolean {
+  if (ride?.fell) return false;
   const at = locateTruck(layout.rail, truck, step);
   if (at === null) return false;
+  if (ride && positions) {
+    // The truck stands on the four deck nodes around it; if they have sunk, it has no footing: it
+    // falls (from then its weight is not applied) and stays fallen.
+    let x = 0;
+    let y = 0;
+    let z = 0;
+    let sunk = false;
+    for (let s = 0; s < 2; s++) {
+      for (const i of [layout.deck(s, at.bay), layout.deck(s, at.bay + 1)]) {
+        x += positions[i * 3]! / 4;
+        y += positions[i * 3 + 1]! / 4;
+        z += positions[i * 3 + 2]! / 4;
+        if (positions[i * 3 + 1]! < MEMBER.radius - TRUCK_SINK_LIMIT) sunk = true;
+      }
+    }
+    if (sunk) {
+      ride.fell = { k: step, x, y, z };
+      return false;
+    }
+  }
   const w = (truck.mass * GRAVITY) / 2; // per truss
   for (let s = 0; s < 2; s++) {
     batch.addForce(layout.deck(s, at.bay), 0, -w * (1 - at.t), 0);
@@ -305,12 +360,20 @@ export function rollTruck3(batch: CommandBatch, layout: BridgeLayout3, truck: Tr
  * - removeColumn: the middle bay is cut across the bottom (both chords and both deck diagonals);
  * - overload: the heavy truck.
  */
-export function bridgeAction(batch: CommandBatch, layout: BridgeLayout3, kind: ActionKind | null, step: number, light: Truck): void {
+export function bridgeAction(
+  batch: CommandBatch,
+  layout: BridgeLayout3,
+  kind: ActionKind | null,
+  step: number,
+  light: Truck,
+  rides?: BridgeRides,
+  positions?: ArrayLike<number>,
+): void {
   if (kind === 'overload') {
-    if (step >= ACTION_START_STEP) rollTruck3(batch, layout, HEAVY_TRUCK, step - ACTION_START_STEP);
+    if (step >= ACTION_START_STEP) rollTruck3(batch, layout, HEAVY_TRUCK, step - ACTION_START_STEP, rides?.heavy, positions);
     return;
   }
-  rollTruck3(batch, layout, light, step);
+  rollTruck3(batch, layout, light, step, rides?.light, positions);
   if (kind === null || step < ACTION_START_STEP) return;
   bridgeCut(batch, layout, kind, step - ACTION_START_STEP);
 }
@@ -375,13 +438,21 @@ export function liveTowerCommands(batch: CommandBatch, layout: TowerLayout, arme
  * action acts from the step it was armed on. An overload brings the heavy truck on from there and
  * takes the light one off the deck.
  */
-export function liveBridgeCommands(batch: CommandBatch, layout: BridgeLayout3, armed: ArmedAction | null, step: number, light: Truck): void {
+export function liveBridgeCommands(
+  batch: CommandBatch,
+  layout: BridgeLayout3,
+  armed: ArmedAction | null,
+  step: number,
+  light: Truck,
+  rides?: BridgeRides,
+  positions?: ArrayLike<number>,
+): void {
   const k = armed === null ? -1 : step - armed.start;
   if (armed !== null && k >= 0 && armed.kind === 'overload') {
-    rollTruck3(batch, layout, HEAVY_TRUCK, k);
+    rollTruck3(batch, layout, HEAVY_TRUCK, k, rides?.heavy, positions);
     return;
   }
-  rollTruck3(batch, layout, light, step);
+  rollTruck3(batch, layout, light, step, rides?.light, positions);
   if (armed === null || k < 0) return;
   if (armed.aim) aimedKnock(batch, armed.aim, BRIDGE_KNOCK_FORCE, k);
   else bridgeCut(batch, layout, armed.kind, k);

@@ -49,6 +49,8 @@ import {
   buildBridge3,
   buildTower,
   HEAVY_TRUCK,
+  newRides,
+  type BridgeRides,
   identifyScene,
   liveBridgeCommands,
   liveTowerCommands,
@@ -62,7 +64,7 @@ import {
 } from '../src/scenes3d.ts';
 import { NODE_TEXTURE_WIDTH, nodeTextureRows, packNodeTexture, skinAttributes } from '../src/skin.ts';
 import { stressRgb, YIELDED_RGB } from '../src/stress-colour.ts';
-import type { Terrain } from '../src/terrain.ts';
+import { heightAt, type Terrain } from '../src/terrain.ts';
 import { World, type Snapshot } from '../src/world.ts';
 
 type SceneName = 'tower' | 'bridge';
@@ -120,6 +122,8 @@ interface Run {
   drawn: Float32Array;
   /** The action that was started on this run, if any. */
   armed: ArmedAction | null;
+  /** Whether each truck has lost its footing (the deck sank under it), and where. */
+  rides: BridgeRides;
   /** A live run is recorded as it goes; a replay has a player instead. */
   recorder: Recorder | null;
   player: Player | null;
@@ -360,6 +364,18 @@ function drawTruck(r: Run, positions: Float32Array): void {
   const truck: Truck = heavy ? HEAVY_TRUCK : STANDARD_TRUCK;
   const t0 = r.step - 1 + (r.playing ? r.alpha : 1) - (heavy ? r.armed!.start : 0);
   if (t0 < 0) return;
+  const [fx, fy, fz] = heavy ? TRUCK_SIZE.heavy : TRUCK_SIZE.light;
+  const fell = (heavy ? r.rides.heavy : r.rides.light).fell;
+  if (fell && t0 >= fell.k) {
+    // The deck sank under it: it drops from where it was, and rests on the ground below.
+    const secs = (t0 - fell.k) * STEP_SECONDS;
+    const ground = heightAt(layout.terrain, fell.x, fell.z) + fy / 2;
+    truckMesh.scale.set(fx, fy, fz);
+    truckMesh.position.set(fell.x, Math.max(fell.y + DECK_SLAB_TOP + fy / 2 - 0.5 * 9.81 * secs * secs, ground), fell.z);
+    (truckMesh.material as MeshStandardMaterial).color.setHex(heavy ? 0xd9523e : 0xe8b24a);
+    truckMesh.visible = true;
+    return;
+  }
   const at = locateTruck(layout.rail, truck, t0);
   if (at === null) return;
   let x = 0;
@@ -430,6 +446,7 @@ function startRun(name: SceneName, until = -1, action: ActionKind | null = null)
     drawn: new Float32Array(snap.positions.length),
     // `?action=` starts an action at the standard step, which is exactly the headless action.
     armed: action === null ? null : { kind: action, start: ACTION_START_STEP },
+    rides: newRides(),
     recorder,
     player: null,
     label: '',
@@ -484,6 +501,7 @@ function startReplay(rec: Recording, label: string, until = -1): void {
     alpha: 1,
     drawn: new Float32Array(snap.positions.length),
     armed: null,
+    rides: newRides(),
     recorder: null,
     player,
     label,
@@ -517,7 +535,7 @@ function stepOnce(r: Run): void {
     r.substeps = s;
   } else {
     const batch = new CommandBatch();
-    if (r.scene === 'bridge') liveBridgeCommands(batch, r.layout as BridgeLayout3, r.armed, r.step, STANDARD_TRUCK);
+    if (r.scene === 'bridge') liveBridgeCommands(batch, r.layout as BridgeLayout3, r.armed, r.step, STANDARD_TRUCK, r.rides, r.world.positions());
     else liveTowerCommands(batch, r.layout as TowerLayout, r.armed, r.step);
     r.substeps = r.recorder!.step(batch);
   }

@@ -6,12 +6,15 @@ import { Core, EVENT_BREAK, EVENT_FREEZE, EVENT_YIELD } from "../src/core.ts";
 import { STANDARD_TRUCK } from "../src/bridge.ts";
 import {
   ACTION_START_STEP,
+  HEAVY_TRUCK,
   MEMBER,
   bridgeAction,
   buildBridge3,
   buildTower,
+  newRides,
   towerAction,
   type ActionKind,
+  type BridgeRides,
 } from "../src/scenes3d.ts";
 import {
   VALLEY_LEDGE_LEFT,
@@ -60,6 +63,8 @@ interface Run {
   maxSubsteps: number;
   /** Lowest `node y - ground height` seen at any node at the end of any step. */
   lowestGap: number;
+  /** The bridge's trucks: which lost their footing, and where. */
+  rides: BridgeRides;
 }
 
 function runScene(core: Core, scene: Scene, kind: ActionKind | null, seconds: number): Run {
@@ -80,15 +85,17 @@ function runScene(core: Core, scene: Scene, kind: ActionKind | null, seconds: nu
     maxSpeed: 0,
     maxSubsteps: 0,
     lowestGap: Infinity,
+    rides: newRides(),
   };
   let prev = world.positions();
   const steps = Math.round(seconds * 60);
+  const rides = run.rides;
   for (let s = 0; s < steps; s++) {
     const cmds = new CommandBatch();
     if (scene === "tower") {
       if (kind !== null) towerAction(cmds, layout as ReturnType<typeof buildTower>, kind, s);
     } else {
-      bridgeAction(cmds, layout as ReturnType<typeof buildBridge3>, kind, s, STANDARD_TRUCK);
+      bridgeAction(cmds, layout as ReturnType<typeof buildBridge3>, kind, s, STANDARD_TRUCK, rides, prev);
     }
     assert.equal(world.apply(cmds).rejected, 0, `list rejected at step ${s}`);
     run.lists.push(cmds.bytes.slice());
@@ -157,6 +164,30 @@ for (const scene of ["tower", "bridge"] as const) {
     });
   }
 }
+
+test("the overload truck breaks the bridge with the truck at the middle of the span, and then falls with it", async () => {
+  const core = await loadCore();
+  const run = runScene(core, "bridge", "overload", 20);
+  assert.ok(run.firstBreak >= ACTION_START_STEP, "a beam broke");
+  // The truck starts at the left end at ACTION_START_STEP; the deck is 24 m long, the middle at 12 m.
+  const x = (HEAVY_TRUCK.speed * (run.firstBreak - ACTION_START_STEP)) / 60;
+  assert.ok(x > 9 && x < 15, `first break with the truck at ${x.toFixed(1)} m of 24`);
+  const fell = run.rides.heavy.fell;
+  assert.ok(fell !== null, "the truck lost its footing");
+  assert.ok(fell.x > 9 && fell.x < 15, `the truck fell at x = ${fell.x.toFixed(1)}`);
+  // From then its weight is gone: every later list is empty (nothing else acts in this run).
+  const after = run.lists.slice(1 + ACTION_START_STEP + fell.k + 1);
+  assert.ok(after.length > 600, "a long stretch after the fall");
+  assert.ok(after.every((l) => CommandBatch.fromBytes(l).count === 0), "no force commands after the truck fell");
+  run.world.free();
+});
+
+test("a truck that the deck holds never loses its footing", async () => {
+  const core = await loadCore();
+  const run = runScene(core, "bridge", null, 12);
+  assert.equal(run.rides.light.fell, null);
+  run.world.free();
+});
 
 for (const [scene, kind] of [["tower", "knock"], ["bridge", "overload"]] as const) {
   test(`the ${scene} ${kind} gives the same hash twice, and a replay of the saved lists matches`, async () => {
