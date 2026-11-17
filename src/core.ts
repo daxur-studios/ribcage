@@ -7,8 +7,10 @@
  * `memory.buffer` for every read and never kept across a call into the core.
  */
 
+import { COMMAND_BYTES, type CommandBatch } from './commands.ts';
+
 /** The ABI version this loader was written for (`ABI_VERSION` in core/src/ffi.rs). */
-export const ABI_VERSION = 1;
+export const ABI_VERSION = 2;
 
 /** A host pointer inside the core (an integer to JavaScript). */
 export type HostPtr = number;
@@ -41,7 +43,39 @@ interface Exports {
   rc_event_count(h: number): number;
   rc_events_ptr(h: number): number;
   rc_write_render(h: number): number;
+  rc_command_bytes(): number;
+  rc_commands_reserve(h: number, count: number): number;
+  rc_apply_commands(h: number): number;
+  rc_results_ptr(h: number): number;
+  rc_node_flags_ptr(h: number): number;
+  rc_beam_flags_ptr(h: number): number;
+  rc_write_beams(h: number): number;
+  rc_beam_ratio_ptr(h: number): number;
 }
+
+/** What one batch of commands did: a result per record and the number rejected. */
+export interface ApplyResult {
+  /** New index for an add, 1 for another accepted command, `REJECTED` for a rejected one. */
+  results: Uint32Array;
+  rejected: number;
+}
+
+/** Per-beam output for drawing (one entry per beam slot, live or not). */
+export interface BeamView {
+  /** Two node indices per beam. */
+  ends: Uint32Array;
+  /** Signed strain in units of the yield strain: 1 is at yield, negative is compression. */
+  ratio: Float32Array;
+  /** `BEAM_*` flags. */
+  flags: Uint32Array;
+}
+
+export const BEAM_ALIVE = 1;
+export const BEAM_BROKEN = 2;
+export const BEAM_YIELDED = 4;
+export const NODE_ALIVE = 1;
+export const NODE_PINNED = 2;
+export const NODE_FROZEN = 4;
 
 /** One event record (`event::Event`: 24 bytes, little endian). */
 export interface CoreEvent {
@@ -72,6 +106,9 @@ export class Core {
     const version = x.rc_abi_version();
     if (version !== ABI_VERSION) {
       throw new Error(`core ABI version ${version}, loader expects ${ABI_VERSION}: rebuild the wasm`);
+    }
+    if (x.rc_command_bytes() !== COMMAND_BYTES) {
+      throw new Error(`core command record is ${x.rc_command_bytes()} bytes, loader expects ${COMMAND_BYTES}`);
     }
     return new Core(x);
   }
@@ -168,5 +205,39 @@ export class Core {
       });
     }
     return out;
+  }
+
+  /**
+   * Applies a batch of commands in order (rule 8). Call before the step, never during one.
+   * An empty batch is a no-op.
+   */
+  applyCommands(h: HostPtr, batch: CommandBatch): ApplyResult {
+    const n = batch.count;
+    if (n === 0) return { results: new Uint32Array(0), rejected: 0 };
+    // Reserve first (it can grow memory), then take a fresh view to copy the bytes in.
+    const ptr = this.#x.rc_commands_reserve(h, n);
+    new Uint8Array(this.#x.memory.buffer, ptr, n * COMMAND_BYTES).set(batch.bytes);
+    const rejected = this.#x.rc_apply_commands(h);
+    const results = new Uint32Array(this.#x.memory.buffer, this.#x.rc_results_ptr(h), n).slice();
+    return { results, rejected };
+  }
+
+  /** Beam ends, strain ratios and flags, as copies. Call once per rendered frame. */
+  beams(h: HostPtr): BeamView {
+    const n = this.#x.rc_beam_count(h);
+    const endsPtr = this.#x.rc_write_beams(h);
+    const ratioPtr = this.#x.rc_beam_ratio_ptr(h);
+    const flagsPtr = this.#x.rc_beam_flags_ptr(h);
+    const mem = this.#x.memory.buffer;
+    return {
+      ends: new Uint32Array(mem, endsPtr, n * 2).slice(),
+      ratio: new Float32Array(mem, ratioPtr, n).slice(),
+      flags: new Uint32Array(mem, flagsPtr, n).slice(),
+    };
+  }
+
+  /** A copy of the node flags, one per node slot. */
+  nodeFlags(h: HostPtr): Uint32Array {
+    return new Uint32Array(this.#x.memory.buffer, this.#x.rc_node_flags_ptr(h), this.#x.rc_node_count(h)).slice();
   }
 }

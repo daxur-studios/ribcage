@@ -18,24 +18,49 @@
 //! floating origin until a scene is large enough to need one (milestone 3 or later).
 
 use crate::bench::{apply_gust, bench_scene, BenchSpec};
+use crate::command::{apply_commands, Command, COMMAND_BYTES};
 use crate::event::Event;
 use crate::real::{Real, Vec3};
 use crate::sim::{state_hash, step};
 use crate::world::{BeamSpec, World};
 
 /// Bumped by any change to an exported function's signature or to a record layout.
-pub const ABI_VERSION: u32 = 1;
+pub const ABI_VERSION: u32 = 2;
+
+/// Bytes per command record, for the host to check against its own layout.
+#[no_mangle]
+pub extern "C" fn rc_command_bytes() -> u32 {
+    COMMAND_BYTES as u32
+}
 
 /// One world plus the buffers handed out to the host.
 pub struct Host {
     world: World,
     /// Node positions as `f32`, three per node, filled by [`rc_write_render`].
     render: Vec<f32>,
+    /// Command records the host writes into, applied by [`rc_apply_commands`].
+    commands: Vec<Command>,
+    results: Vec<u32>,
+    /// Beam ends (two per beam slot) and strain ratios, filled by [`rc_write_beams`].
+    beam_ends: Vec<u32>,
+    beam_ratio: Vec<f32>,
     /// Nodes that [`rc_bench_step`] pushes (empty for an ordinary host).
     load_nodes: Vec<u32>,
 }
 
 impl Host {
+    fn with(world: World, load_nodes: Vec<u32>) -> Host {
+        Host {
+            world,
+            render: Vec::new(),
+            commands: Vec::new(),
+            results: Vec::new(),
+            beam_ends: Vec::new(),
+            beam_ratio: Vec::new(),
+            load_nodes,
+        }
+    }
+
     pub fn world(&self) -> &World {
         &self.world
     }
@@ -49,7 +74,7 @@ pub extern "C" fn rc_abi_version() -> u32 {
 /// A new empty host. The pointer is an integer to JavaScript.
 #[no_mangle]
 pub extern "C" fn rc_host_new() -> *mut Host {
-    Box::into_raw(Box::new(Host { world: World::new(), render: Vec::new(), load_nodes: Vec::new() }))
+    Box::into_raw(Box::new(Host::with(World::new(), Vec::new())))
 }
 
 /// A host holding the benchmark scene (`standard` non-zero: the reported scene; zero: the small
@@ -58,7 +83,7 @@ pub extern "C" fn rc_host_new() -> *mut Host {
 pub extern "C" fn rc_bench_new(standard: u32) -> *mut Host {
     let spec = if standard != 0 { BenchSpec::STANDARD } else { BenchSpec::SMALL };
     let (world, load_nodes) = bench_scene(spec).into_parts();
-    Box::into_raw(Box::new(Host { world, render: Vec::new(), load_nodes }))
+    Box::into_raw(Box::new(Host::with(world, load_nodes)))
 }
 
 /// # Safety
@@ -188,6 +213,100 @@ pub unsafe extern "C" fn rc_event_count(h: *const Host) -> u32 {
 #[no_mangle]
 pub unsafe extern "C" fn rc_events_ptr(h: *const Host) -> *const Event {
     (*h).world.events.as_ptr()
+}
+
+/// Makes room for `count` command records (see `command::Command`, [`COMMAND_BYTES`] each) and
+/// returns a pointer to the first. The host writes the records there, then calls
+/// [`rc_apply_commands`]. The records are zeroed (kind 0, always rejected) until written. Memory
+/// may move on this call, so the host re-reads its view afterwards.
+///
+/// # Safety
+/// `h` is a live host pointer.
+#[no_mangle]
+pub unsafe extern "C" fn rc_commands_reserve(h: *mut Host, count: u32) -> *mut Command {
+    let host = &mut *h;
+    host.commands.clear();
+    host.commands.resize(count as usize, Command::default());
+    host.commands.as_mut_ptr()
+}
+
+/// Applies the `count` records last reserved, in order (layout rule 8), and returns how many were
+/// rejected. Per-record results are at [`rc_results_ptr`].
+///
+/// # Safety
+/// `h` is a live host pointer.
+#[no_mangle]
+pub unsafe extern "C" fn rc_apply_commands(h: *mut Host) -> u32 {
+    let host = &mut *h;
+    apply_commands(&mut host.world, &host.commands, &mut host.results)
+}
+
+/// One `u32` per applied record: the new index for an add, 1 for another accepted command,
+/// `u32::MAX` for a rejected one. Valid until the next apply.
+///
+/// # Safety
+/// `h` is a live host pointer.
+#[no_mangle]
+pub unsafe extern "C" fn rc_results_ptr(h: *const Host) -> *const u32 {
+    (*h).results.as_ptr()
+}
+
+/// Node flags, one `u32` per node slot (`world::NODE_*`).
+///
+/// # Safety
+/// `h` is a live host pointer.
+#[no_mangle]
+pub unsafe extern "C" fn rc_node_flags_ptr(h: *const Host) -> *const u32 {
+    (*h).world.node_flags.as_ptr()
+}
+
+/// Beam flags, one `u32` per beam slot (`world::BEAM_*`: alive, broken, yielded).
+///
+/// # Safety
+/// `h` is a live host pointer.
+#[no_mangle]
+pub unsafe extern "C" fn rc_beam_flags_ptr(h: *const Host) -> *const u32 {
+    (*h).world.beam_flags.as_ptr()
+}
+
+/// Fills the beam buffers, one entry per beam slot, and returns the ends: two `u32` per beam
+/// (node indices). Strain ratios are then at [`rc_beam_ratio_ptr`]. Dead and broken beams read
+/// zero. Call once per rendered frame, after the step.
+///
+/// # Safety
+/// `h` is a live host pointer.
+#[no_mangle]
+pub unsafe extern "C" fn rc_write_beams(h: *mut Host) -> *const u32 {
+    let host = &mut *h;
+    let w = &host.world;
+    host.beam_ends.clear();
+    host.beam_ratio.clear();
+    for k in 0..w.beam_count() as usize {
+        host.beam_ends.push(w.beam_a[k]);
+        host.beam_ends.push(w.beam_b[k]);
+        let live = w.beam_alive(k as u32) && w.rest0[k] != 0.0;
+        let ratio = if live {
+            let len = (w.pos[w.beam_b[k] as usize] - w.pos[w.beam_a[k] as usize]).length();
+            let total = (len - w.rest0[k]) / w.rest0[k];
+            let unit = if w.yield_strain[k] > 0.0 { w.yield_strain[k] } else { w.break_strain[k] };
+            total / unit
+        } else {
+            0.0
+        };
+        host.beam_ratio.push(ratio as f32);
+    }
+    host.beam_ends.as_ptr()
+}
+
+/// One `f32` per beam slot, filled by [`rc_write_beams`]: the beam's signed total strain
+/// `(length - rest0) / rest0` in units of its yield strain (1 is at yield; negative is
+/// compression), or in units of its break strain when it has no yield strain.
+///
+/// # Safety
+/// `h` is a live host pointer.
+#[no_mangle]
+pub unsafe extern "C" fn rc_beam_ratio_ptr(h: *const Host) -> *const f32 {
+    (*h).beam_ratio.as_ptr()
 }
 
 /// Fills the render buffer with node positions as `f32` triples (one per node slot) and returns

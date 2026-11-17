@@ -168,6 +168,18 @@ impl World {
         }
     }
 
+    /// Changes a live node's inverse mass; zero pins it, anything else frees it. Velocity is
+    /// kept (a pinned node's is not used), and a frozen flag is left alone.
+    pub fn set_inv_mass(&mut self, i: u32, inv_mass: Real) {
+        let u = i as usize;
+        self.inv_mass[u] = inv_mass;
+        if inv_mass == 0.0 {
+            self.node_flags[u] |= NODE_PINNED;
+        } else {
+            self.node_flags[u] &= !NODE_PINNED;
+        }
+    }
+
     /// Both endpoints must be live nodes (a beam endpoint is always a node, rule 6).
     pub fn add_beam(&mut self, a: u32, b: u32, spec: BeamSpec) -> Handle {
         assert!(a != b && self.node_alive(a) && self.node_alive(b), "beam endpoints must be distinct live nodes");
