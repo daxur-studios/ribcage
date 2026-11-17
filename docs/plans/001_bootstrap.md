@@ -28,7 +28,7 @@ All in `core/`, headless, no rendering or browser code. The [core layout rules](
 - [x] 1.4 Cantilever test against the textbook deflection. Riskiest phase: the tolerance is measured here.
 - [x] 1.5 Yield and break with break events, and their two tests.
 - [x] 1.6 Stability guards: movement clamps, bad-number freeze, and the ten-minute no-energy-gain test.
-- [ ] 1.7 Own sine and cosine, and the benchmark scene (beams, substeps, ms per step).
+- [x] 1.7 Own sine and cosine, and the benchmark scene (beams, substeps, ms per step).
 
 Milestones 2-9 are in the [roadmap](/ROADMAP.md). Each gets its own plan and record when it starts.
 

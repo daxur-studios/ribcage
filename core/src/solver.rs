@@ -37,6 +37,27 @@ pub const MAX_SUBSTEPS: u32 = 32;
 /// where `h = STEP_SECONDS / n`. A beam with zero compliance (infinitely stiff) between
 /// movable nodes asks for the maximum. A beam between two pinned nodes asks for nothing.
 pub fn substep_count(isl: &Island) -> u32 {
+    substep_count_with(isl, SubstepRule::DEFAULT)
+}
+
+/// The two numbers of the substep rule. [`SubstepRule::DEFAULT`] is the deterministic default
+/// and the only one the game uses; other values exist so the benchmark and tests can price
+/// and compare settings (ER 001, phase 1.7) without a second code path.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SubstepRule {
+    /// The rule constant `c`: the count is the smallest `n` with `ω_max · h ≤ c`.
+    pub c: Real,
+    /// Most substeps an island may get (the minimum is always [`MIN_SUBSTEPS`]).
+    pub max: u32,
+}
+
+impl SubstepRule {
+    pub const DEFAULT: SubstepRule = SubstepRule { c: SUBSTEP_C, max: MAX_SUBSTEPS };
+}
+
+/// [`substep_count`] with an explicit rule. Same arithmetic, so `DEFAULT` gives the same bits.
+pub fn substep_count_with(isl: &Island, rule: SubstepRule) -> u32 {
+    let max = rule.max.max(MIN_SUBSTEPS);
     let mut omega2_max: Real = 0.0;
     for k in 0..isl.beam_a.len() {
         let w = isl.inv_mass[isl.beam_a[k] as usize] + isl.inv_mass[isl.beam_b[k] as usize];
@@ -45,7 +66,7 @@ pub fn substep_count(isl: &Island) -> u32 {
         }
         let c = isl.compliance[k];
         if c == 0.0 {
-            return MAX_SUBSTEPS;
+            return max;
         }
         let o2 = w / c;
         if o2 > omega2_max {
@@ -54,7 +75,7 @@ pub fn substep_count(isl: &Island) -> u32 {
     }
     let omega_max = omega2_max.sqrt();
     let mut n = MIN_SUBSTEPS;
-    while n < MAX_SUBSTEPS && omega_max * (STEP_SECONDS / n as Real) > SUBSTEP_C {
+    while n < max && omega_max * (STEP_SECONDS / n as Real) > rule.c {
         n += 1;
     }
     n

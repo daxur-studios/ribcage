@@ -115,7 +115,7 @@ Record and replay is then "save the command lists per step", and the determinism
 
 | Rule | Why | How it is enforced |
 | --- | --- | --- |
-| Only add, subtract, multiply, divide and square root on `Real` | These give identical bits natively and in WebAssembly. Library functions do not. | A lint or review check for calls to library maths functions in `core/` |
+| Only add, subtract, multiply, divide and square root on `Real` | These give identical bits natively and in WebAssembly. Library functions do not. | A test that scans `core/src` for calls to library maths functions (`core/tests/maths.rs`); the core's own sine and cosine are in `core/src/maths.rs` |
 | Own sine, cosine and any other transcendental function | Same reason | The core's maths module is the only one allowed |
 | No fused multiply-add | Native hardware and WebAssembly round it differently | No `mul_add` calls; no fast-math flags |
 | No iteration over hash maps or hash sets | Their order changes between runs | Use sorted lists or index arrays |

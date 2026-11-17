@@ -4,7 +4,7 @@
 use crate::event::Event;
 use crate::island::{build_islands, copy_back};
 use crate::real::{Real, Vec3};
-use crate::solver::{solve_island, substep_count};
+use crate::solver::{solve_island, substep_count_with, SubstepRule};
 use crate::world::{World, NODE_FROZEN};
 
 /// Standard gravity as a per-node acceleration (a function so it can vary later).
@@ -15,21 +15,43 @@ pub fn gravity_at(_pos: Vec3) -> Vec3 {
 /// Advances the world by one fixed step in deterministic mode: each island gets its
 /// rule-based substep count ([`substep_count`]). Returns the largest count any island used.
 pub fn step(world: &mut World) -> u32 {
-    step_inner(world, None)
+    step_inner(world, Choice::Rule(SubstepRule::DEFAULT)).max_substeps
+}
+
+/// What one step did, for the benchmark and debug overlays. Read-only bookkeeping.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct StepStats {
+    /// Islands solved (frozen islands are skipped and not counted).
+    pub islands: u32,
+    /// Largest substep count any island used.
+    pub max_substeps: u32,
+    /// Sum over islands of substeps times beams: the number of beam solves done.
+    pub beam_solves: u64,
+}
+
+/// Same as [`step`] with an explicit substep rule, and a report. `SubstepRule::DEFAULT` is
+/// bit-identical to [`step`]; other rules are for pricing and comparing (ER 001, phase 1.7).
+pub fn step_with_rule(world: &mut World, rule: SubstepRule) -> StepStats {
+    step_inner(world, Choice::Rule(rule))
+}
+
+enum Choice {
+    Rule(SubstepRule),
+    Fixed(u32),
 }
 
 /// Same as [`step`], but every island uses exactly `substeps`. For demos and tests that
 /// compare substep counts; not the deterministic default.
 pub fn step_with_substeps(world: &mut World, substeps: u32) -> u32 {
-    step_inner(world, Some(substeps.max(1)))
+    step_inner(world, Choice::Fixed(substeps.max(1))).max_substeps
 }
 
-fn step_inner(world: &mut World, fixed: Option<u32>) -> u32 {
+fn step_inner(world: &mut World, choice: Choice) -> StepStats {
     world.events.clear();
     world.clamped_nodes = 0;
     let done = world.step_count + 1;
     let mut islands = build_islands(world);
-    let mut most = 0;
+    let mut stats = StepStats::default();
     for isl in islands.iter_mut() {
         // An island holding a frozen node is not solved and reports nothing; its nodes keep
         // their position and zero velocity. Its buffer is dropped without a copy back.
@@ -37,7 +59,10 @@ fn step_inner(world: &mut World, fixed: Option<u32>) -> u32 {
             isl.skipped = true;
             continue;
         }
-        let n = fixed.unwrap_or_else(|| substep_count(isl));
+        let n = match choice {
+            Choice::Rule(rule) => substep_count_with(isl, rule),
+            Choice::Fixed(n) => n,
+        };
         let out = solve_island(isl, n, world.max_speed);
         world.clamped_nodes += out.clamped;
         if out.frozen {
@@ -48,7 +73,9 @@ fn step_inner(world: &mut World, fixed: Option<u32>) -> u32 {
             }
         }
         world.events.extend(out.events.into_iter().map(|e| Event { step: done, ..e }));
-        most = most.max(n);
+        stats.islands += 1;
+        stats.max_substeps = stats.max_substeps.max(n);
+        stats.beam_solves += n as u64 * isl.beam_a.len() as u64;
     }
     for isl in islands.iter().filter(|isl| !isl.skipped) {
         copy_back(world, isl);
@@ -57,7 +84,7 @@ fn step_inner(world: &mut World, fixed: Option<u32>) -> u32 {
         *f = Vec3::ZERO;
     }
     world.step_count += 1;
-    most
+    stats
 }
 
 /// Kinetic plus gravitational plus elastic energy of the live world, in joules: for each
