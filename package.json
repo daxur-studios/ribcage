@@ -12,10 +12,12 @@
     "build:web": "pnpm build:wasm && node scripts/build-web.mjs",
     "serve": "node scripts/serve.mjs",
     "replay": "node scripts/replay.mjs",
-    "test":"pnpm build:wasm && node --test \"test/**/*.test.ts\""
+    "test": "pnpm build:wasm && node --test \"test/**/*.test.ts\""
   },
   "devDependencies": {
     "@types/node": "^22.10.0",
+    "@types/three": "0.187.0",
+    "three": "0.187.0",
     "typescript": "^5.7.0"
   }
 }

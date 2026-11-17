@@ -1,6 +1,6 @@
 # ribcage roadmap
 
-**TL;DR.** Overall progress: **24.5%**. Now: milestones 1 (solver core and tools) and 2 (2D bridge builder) are complete; milestone 3 (3D on terrain in Three.js) is in progress (phases 3.1 to 3.4 done: terrain, ground contact, beam midpoints, and the headless tower and bridge), planned in [Plan 003](docs/plans/003_terrain_3d.md). First playable slice ends at milestone 4.
+**TL;DR.** Overall progress: **24.5%**. Now: milestones 1 (solver core and tools) and 2 (2D bridge builder) are complete; milestone 3 (3D on terrain in Three.js) is in progress (phases 3.1 to 3.5 done: terrain, ground contact, beam midpoints, the headless tower and bridge, and the Three.js page), planned in [Plan 003](docs/plans/003_terrain_3d.md). First playable slice ends at milestone 4.
 
 This page is the single answer to "what are we building, and how far along is it?". The design is the [spec](docs/research/node-beam-engine-design-spec.md). The detailed work for the current milestone lives in its plan.
 

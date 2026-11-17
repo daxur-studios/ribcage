@@ -25,6 +25,7 @@ import {
 } from '../src/design.ts';
 import { bridgeDesign, STRONG_BRIDGE, WEAK_BRIDGE } from '../src/bridge.ts';
 import { decodeRecording, encodeRecording, Player, Recorder, type Recording } from '../src/recording.ts';
+import { stressCss as stressColour } from '../src/stress-colour.ts';
 import { World, type Snapshot } from '../src/world.ts';
 
 type Tool = 'node' | 'beam' | 'pin' | 'delete';
@@ -396,17 +397,6 @@ function singleStep(): void {
 }
 
 // ---- drawing --------------------------------------------------------------------------------
-
-const GREY: [number, number, number] = [138, 147, 163];
-const RED: [number, number, number] = [255, 93, 93];
-const BLUE: [number, number, number] = [74, 163, 255];
-
-function stressColour(ratio: number): string {
-  const t = Math.min(1, Math.abs(ratio));
-  const to = ratio >= 0 ? RED : BLUE;
-  const c = GREY.map((g, i) => Math.round(g + (to[i]! - g) * t));
-  return `rgb(${c[0]},${c[1]},${c[2]})`;
-}
 
 function drawGrid(): void {
   const v = viewParams();

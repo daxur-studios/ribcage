@@ -56,7 +56,7 @@ Order: 3.1 → 3.2 → 3.3 → 3.4 → 3.5, then 3.6 and 3.8 can run side by sid
   **Test** (`test/scenes3d.test.ts`): both stand for 20 s with no yield or break and come to rest (every node slower than 1 mm/s); each collapses under each action it is meant to (break events, then everything comes to rest within a set time); during a collapse no node goes below the ground by more than its radius plus 1 cm, no node is clamped and no island freezes; the same lists run twice give the same hash. Roadmap check "a tower and a bridge stand on height-map terrain with friction" can be ticked here (seen in 3.5).
   Demo: skip (shown in 3.5 and 3.6).
 
-- [ ] **3.5 Three.js page.** Build with: Sonnet.
+- [x] **3.5 Three.js page.** Build with: Sonnet.
   `three` and `@types/three` at one exact version; `scripts/build-web.mjs` copies the needed module files into `dist/web/vendor/`; `web/terrain.html` (import map) and `web/viewer3d.ts`. Terrain drawn from the same triangles as the core. Beams as one instanced cylinder mesh, coloured by stress with the 2D editor's scale (moved to a shared `src/stress-colour.ts`, the 2D editor using it too), broken beams hidden; nodes as optional small spheres; orbit camera; a scene picker; Run and Stop. The 2D editor stays as it is.
   **Test:** the pure parts in Node (beam instance transforms from two end points, colour scale shared with 2D); in the browser both scenes stand on the terrain, and after a fixed number of steps the page shows the same hash as Node; no console errors.
   Demo: an orbit around the tower and the bridge standing on the terrain.
