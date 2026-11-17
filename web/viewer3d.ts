@@ -17,6 +17,8 @@ import {
   BufferGeometry,
   Color,
   CylinderGeometry,
+  DataTexture,
+  FloatType,
   DirectionalLight,
   DynamicDrawUsage,
   HemisphereLight,
@@ -24,17 +26,22 @@ import {
   Matrix4,
   Mesh,
   MeshStandardMaterial,
+  MeshStandardNodeMaterial,
+  NearestFilter,
   PerspectiveCamera,
   Quaternion,
+  RGBAFormat,
   Scene,
   SphereGeometry,
   Vector3,
   WebGPURenderer,
 } from 'three/webgpu';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { attribute, cross, Fn, int, ivec2, textureLoad, transformNormalToView, varyingProperty } from 'three/tsl';
 import { CommandBatch } from '../src/commands.ts';
 import { BEAM_ALIVE, BEAM_BROKEN, BEAM_YIELDED, Core } from '../src/core.ts';
 import { locateTruck, STANDARD_TRUCK, STEP_SECONDS, type Truck } from '../src/design.ts';
+import { bridgePanels, DECK_SLAB_TOP, towerPanels, type PanelSet } from '../src/panels3d.ts';
 import { lerpPositions, newPlacement, pickNode, placeBeam, terrainTriangles } from '../src/render3d.ts';
 import { decodeRecording, encodeRecording, Player, Recorder, type Recording } from '../src/recording.ts';
 import {
@@ -53,6 +60,7 @@ import {
   type BridgeLayout3,
   type TowerLayout,
 } from '../src/scenes3d.ts';
+import { NODE_TEXTURE_WIDTH, nodeTextureRows, packNodeTexture, skinAttributes } from '../src/skin.ts';
 import { stressRgb, YIELDED_RGB } from '../src/stress-colour.ts';
 import type { Terrain } from '../src/terrain.ts';
 import { World, type Snapshot } from '../src/world.ts';
@@ -76,6 +84,8 @@ const sceneSel = $<HTMLSelectElement>('scene');
 const runBtn = $<HTMLButtonElement>('run');
 const stopBtn = $<HTMLButtonElement>('stop');
 const nodesBox = $<HTMLInputElement>('nodes');
+const beamsBox = $<HTMLInputElement>('beams');
+const panelsBox = $<HTMLInputElement>('panels');
 const resetViewBtn = $<HTMLButtonElement>('reset-view');
 const pauseBtn = $<HTMLButtonElement>('pause');
 const stepBtn = $<HTMLButtonElement>('step');
@@ -147,6 +157,9 @@ const VIEWS: Record<SceneName, { from: [number, number, number]; to: [number, nu
 let terrainMesh: Mesh | null = null;
 let beamMesh: InstancedMesh | null = null;
 let nodeMesh: InstancedMesh | null = null;
+/** The skinned panels, and the texture their vertex function reads node positions from. */
+let panelMesh: Mesh | null = null;
+let nodeTexture: DataTexture | null = null;
 
 /** The bridge's truck: a box on the deck (the heavy one is bigger and red). Drawing only. */
 const truckMesh = new Mesh(new BoxGeometry(1, 1, 1), new MeshStandardMaterial({ color: 0xe8b24a, roughness: 0.6 }));
@@ -203,12 +216,80 @@ function makeInstances(nodes: number, beams: number): void {
   beamMesh.instanceMatrix.setUsage(DynamicDrawUsage);
   beamMesh.frustumCulled = false;
   beamMesh.setColorAt(0, new Color(1, 1, 1)); // makes the colour buffer
+  beamMesh.visible = beamsBox.checked;
   scene.add(beamMesh);
   nodeMesh = new InstancedMesh(new SphereGeometry(MEMBER.radius, 12, 8), new MeshStandardMaterial({ color: 0xcfd6e2, roughness: 0.6 }), nodes);
   nodeMesh.instanceMatrix.setUsage(DynamicDrawUsage);
   nodeMesh.frustumCulled = false;
   nodeMesh.visible = nodesBox.checked;
   scene.add(nodeMesh);
+}
+
+// ---- skinned panels ------------------------------------------------------------------------
+
+/** The panel sets are fixed per scene; built once each. */
+const panelSets: Partial<Record<SceneName, PanelSet>> = {};
+function panelsFor(name: SceneName): PanelSet {
+  return (panelSets[name] ??= name === 'tower' ? towerPanels(STANDARD_TOWER) : bridgePanels(STANDARD_BRIDGE3));
+}
+
+/**
+ * The TSL vertex function of `src/skin.ts` (`shadeVertexF32` is its CPU copy): read the vertex's
+ * four nodes from the node texture, place the vertex at `Σ wᵢ pᵢ`, and turn its normal by the
+ * cofactor of the current edges `eᵢ = pᵢ − p₀`: `m₁ (e₂×e₃) + m₂ (e₃×e₁) + m₃ (e₁×e₂)`.
+ */
+function skinMaterial(tex: DataTexture): MeshStandardNodeMaterial {
+  const m = new MeshStandardNodeMaterial({ vertexColors: true, roughness: 0.85, metalness: 0 });
+  const W = int(NODE_TEXTURE_WIDTH);
+  const nodeAt = (i: ReturnType<typeof int>) => textureLoad(tex, ivec2(i.mod(W), i.div(W))).xyz;
+  const skinNormal = varyingProperty('vec3', 'skinNormal');
+  m.positionNode = Fn(() => {
+    const idx = attribute('cellNodes', 'vec4');
+    const w = attribute('cellWeights', 'vec4');
+    const r = attribute('restNormal', 'vec3');
+    const p0 = nodeAt(int(idx.x)).toVar();
+    const p1 = nodeAt(int(idx.y)).toVar();
+    const p2 = nodeAt(int(idx.z)).toVar();
+    const p3 = nodeAt(int(idx.w)).toVar();
+    const e1 = p1.sub(p0).toVar();
+    const e2 = p2.sub(p0).toVar();
+    const e3 = p3.sub(p0).toVar();
+    skinNormal.assign(cross(e2, e3).mul(r.x).add(cross(e3, e1).mul(r.y)).add(cross(e1, e2).mul(r.z)));
+    return p0.mul(w.x).add(p1.mul(w.y)).add(p2.mul(w.z)).add(p3.mul(w.w));
+  })();
+  m.normalNode = transformNormalToView(skinNormal).normalize();
+  return m;
+}
+
+/** The scene's panels as one mesh, bound to a node texture sized for `nodeCount` nodes. */
+function makePanels(set: PanelSet, nodeCount: number): void {
+  disposeMesh(panelMesh);
+  nodeTexture?.dispose();
+  const rows = nodeTextureRows(nodeCount);
+  nodeTexture = new DataTexture(new Float32Array(NODE_TEXTURE_WIDTH * rows * 4), NODE_TEXTURE_WIDTH, rows, RGBAFormat, FloatType);
+  nodeTexture.minFilter = NearestFilter;
+  nodeTexture.magFilter = NearestFilter;
+  nodeTexture.generateMipmaps = false;
+  const a = skinAttributes(set.binding);
+  const g = new BufferGeometry();
+  g.setAttribute('position', new BufferAttribute(Float32Array.from(set.positions), 3));
+  g.setAttribute('normal', new BufferAttribute(Float32Array.from(set.normals), 3));
+  g.setAttribute('color', new BufferAttribute(set.colours, 3));
+  g.setAttribute('cellNodes', new BufferAttribute(a.nodes, 4));
+  g.setAttribute('cellWeights', new BufferAttribute(a.weights, 4));
+  g.setAttribute('restNormal', new BufferAttribute(a.restNormal, 3));
+  g.setIndex(new BufferAttribute(set.indices, 1));
+  panelMesh = new Mesh(g, skinMaterial(nodeTexture));
+  panelMesh.frustumCulled = false; // the rest-pose bounds say nothing about where the nodes are
+  panelMesh.visible = panelsBox.checked;
+  scene.add(panelMesh);
+}
+
+/** Uploads the drawn node positions for the panels' vertex function. */
+function drawPanels(positions: Float32Array): void {
+  if (!panelMesh || !nodeTexture || !panelMesh.visible) return;
+  packNodeTexture(positions, nodeTexture.image.data as Float32Array);
+  nodeTexture.needsUpdate = true;
 }
 
 const place = newPlacement();
@@ -261,6 +342,7 @@ function drawRun(r: Run): void {
     positions = r.drawn;
   }
   drawSnapshot(r.snap, positions);
+  drawPanels(positions);
   drawTruck(r, positions);
 }
 
@@ -288,7 +370,7 @@ function drawTruck(r: Run, positions: Float32Array): void {
   }
   const [sx, sy, sz] = heavy ? TRUCK_SIZE.heavy : TRUCK_SIZE.light;
   truckMesh.scale.set(sx, sy, sz);
-  truckMesh.position.set(x, y + MEMBER.radius + sy / 2, z);
+  truckMesh.position.set(x, y + DECK_SLAB_TOP + sy / 2, z);
   (truckMesh.material as MeshStandardMaterial).color.setHex(heavy ? 0xd9523e : 0xe8b24a);
   truckMesh.visible = true;
 }
@@ -327,6 +409,7 @@ function startRun(name: SceneName, until = -1, action: ActionKind | null = null)
   }
   showTerrain(layout.terrain);
   makeInstances(layout.nodeCount, layout.beamCount);
+  makePanels(panelsFor(name), layout.nodeCount);
   const snap = world.snapshot();
   run = {
     world,
@@ -378,6 +461,7 @@ function startReplay(rec: Recording, label: string, until = -1): void {
   sceneSel.value = name;
   showTerrain(layout.terrain);
   makeInstances(layout.nodeCount, layout.beamCount);
+  makePanels(panelsFor(name), layout.nodeCount);
   const snap = world.snapshot();
   run = {
     world,
@@ -678,6 +762,9 @@ async function main(): Promise<void> {
 
   const actionParam = params.get('action');
   const action: ActionKind | null = actionParam === 'knock' || actionParam === 'removeColumn' || actionParam === 'overload' ? actionParam : null;
+  // `?beams=0` and `?panels=0` hide either, for a close look at the other.
+  if (params.get('beams') === '0') beamsBox.checked = false;
+  if (params.get('panels') === '0') panelsBox.checked = false;
   const speed = params.get('speed');
   if (speed !== null && [...speedSel.options].some((o) => o.value === speed)) speedSel.value = speed;
 
@@ -704,6 +791,16 @@ async function main(): Promise<void> {
     if (nodeMesh) nodeMesh.visible = nodesBox.checked;
     if (run) drawRun(run);
   });
+  for (const [box, mesh] of [
+    [beamsBox, () => beamMesh],
+    [panelsBox, () => panelMesh],
+  ] as const) {
+    box.addEventListener('change', () => {
+      const m = mesh();
+      if (m) m.visible = box.checked;
+      if (run) drawRun(run);
+    });
+  }
   resetViewBtn.addEventListener('click', resetView);
   window.addEventListener('resize', resize);
   canvas.addEventListener('pointerdown', onPointerDown);

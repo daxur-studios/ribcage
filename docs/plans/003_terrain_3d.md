@@ -71,7 +71,7 @@ Order: 3.1 → 3.2 → 3.3 → 3.4 → 3.5, then 3.6 and 3.8 can run side by sid
   **Test:** the golden replays to its hash in Node and in the browser; a changed command is caught at the next checkpoint.
   Demo: the same collapse twice side by side, identical debris.
 
-- [ ] **3.8 Meshes skinned to the nodes.** Build with: **Opus** (the roadmap's one hard part; it is judged by eye and decides how every later part looks).
+- [x] **3.8 Meshes skinned to the nodes.** Build with: **Opus** (the roadmap's one hard part; it is judged by eye and decides how every later part looks).
   Per-cell panels on both scenes. Each panel vertex is bound to four nodes of its cell that are not in one plane, as barycentric weights (exact for any rigid motion and any uniform stretch of that cell). Node positions go to a float texture once per frame; a TSL vertex function places each vertex from its four nodes, and turns the normal by the cofactor of the cell's deformation. The binding is computed in TypeScript (`src/skin.ts`) and tested in Node; the shader only repeats it.
   **Test:** in Node: the rest pose reproduces the mesh exactly, a rotated and moved lattice gives the rotated and moved mesh (within 1e-6 m), a stretched one the stretched mesh; a CPU reference of the shader maths agrees with `src/skin.ts`. By eye: panels bend with the bridge under the truck and tilt and fall with their cells as the tower collapses, with no panel left floating away from its cell. Ticks the roadmap check "meshes are skinned to the nodes and bend with them".
   Demo: the bridge deck flexing under the truck, close up, beams hidden.
