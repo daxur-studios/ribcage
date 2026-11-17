@@ -1,6 +1,6 @@
 # ribcage roadmap
 
-**TL;DR.** Overall progress: **22%**. Now: milestones 1 (solver core and tools) and 2 (2D bridge builder) are complete; milestone 3 (3D on terrain in Three.js) is next, planned in [Plan 003](docs/plans/003_terrain_3d.md). First playable slice ends at milestone 4.
+**TL;DR.** Overall progress: **24.5%**. Now: milestones 1 (solver core and tools) and 2 (2D bridge builder) are complete; milestone 3 (3D on terrain in Three.js) is in progress (phases 3.1 to 3.4 done: terrain, ground contact, beam midpoints, and the headless tower and bridge), planned in [Plan 003](docs/plans/003_terrain_3d.md). First playable slice ends at milestone 4.
 
 This page is the single answer to "what are we building, and how far along is it?". The design is the [spec](docs/research/node-beam-engine-design-spec.md). The detailed work for the current milestone lives in its plan.
 
@@ -21,14 +21,14 @@ Each milestone has a weight (its share of the whole) and a short list of checks.
 | 0 | Scaffold | 2 | 100% | done |
 | 1 | Solver core and tools | 12 | 100% | done |
 | 2 | 2D bridge builder | 8 | 100% | done |
-| 3 | 3D on terrain in Three.js | 10 | 0% | |
+| 3 | 3D on terrain in Three.js | 10 | 25% | in progress |
 | 4 | Parts and assembly (first playable slice) | 12 | 0% | |
 | 5 | Rigid by default | 16 | 0% | |
 | 6 | Aerodynamics | 10 | 0% | |
 | 7 | Ground and water | 10 | 0% | |
 | 8 | Craft-against-craft collision and threads | 12 | 0% | |
 | 9 | Visual layer | 8 | 0% | |
-| | **Overall** | **100** | **22%** | |
+| | **Overall** | **100** | **24.5%** | |
 
 ## Who plans and builds what
 
@@ -76,7 +76,7 @@ Planning has two stages. The costly-to-redo milestones (5 and 8) have an early d
 
 ### 3. 3D on terrain in Three.js ([Plan 003](docs/plans/003_terrain_3d.md))
 
-- [ ] A tower and a bridge stand on height-map terrain with friction.
+- [x] A tower and a bridge stand on height-map terrain with friction. (`src/terrain.ts`, `src/scenes3d.ts`, `test/scenes3d.test.ts`: both stand 20 s with no yield or break and come to rest, resting on the ground by weight and friction, not pinned; seen on the page in 3.5; see ER 003, phase 3.4.)
 - [ ] Both collapse believably when overloaded or knocked.
 - [ ] Meshes are skinned to the nodes and bend with them.
 - [ ] The stress colours and time controls work in 3D.
