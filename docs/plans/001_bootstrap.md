@@ -35,6 +35,6 @@ Milestones 2-9 are in the [roadmap](/ROADMAP.md). Each gets its own plan and rec
 ## Open questions
 
 - [x] Is the core 3D from the start, or generic over dimension? Decided: 3D from the start.
-- [ ] Move "rigid body with anchor nodes" from milestone 5 to the start of milestone 4? Recommended yes; see the [rigid-by-default brief](/docs/research/rigid-by-default-design-brief.md). Does not block milestone 1.
+- [x] Move "rigid body with anchor nodes" from milestone 5 to the start of milestone 4? Recommended yes; see the [rigid-by-default brief](/docs/research/rigid-by-default-design-brief.md). Does not block milestone 1. Decided by the owner at milestone 4 planning: no, rigid bodies stay in milestone 5 (reasons in [ER 004](/docs/engineering-records/004_parts_and_assembly.md)).
 
 The seven wider open questions are at the end of the spec. None blocks milestone 1.
