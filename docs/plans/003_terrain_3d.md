@@ -66,7 +66,7 @@ Order: 3.1 → 3.2 → 3.3 → 3.4 → 3.5, then 3.6 and 3.8 can run side by sid
   **Test:** interpolation and picking maths in Node; by hand: each action collapses its scene, speeds match their step rates as in ER 002, and stress colours change as load builds. Ticks the roadmap checks "both collapse believably when overloaded or knocked" (with 3.4's tests) and "the stress colours and time controls work in 3D".
   Demo: the tower knocked over and the bridge failing under the truck, at ¼ speed.
 
-- [ ] **3.7 Record and replay in 3D.** Build with: Sonnet.
+- [x] **3.7 Record and replay in 3D.** Build with: Sonnet.
   The 2.4 recorder and player on the 3D page (Save, Load, Replay sample), terrain included through its commands. A committed golden recording of one collapse (`test/fixtures/tower-collapse.rcrd`, under 150 KB, or a smaller scene if not) replayed by a test and by `pnpm replay`.
   **Test:** the golden replays to its hash in Node and in the browser; a changed command is caught at the next checkpoint.
   Demo: the same collapse twice side by side, identical debris.

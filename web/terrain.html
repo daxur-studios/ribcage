@@ -26,6 +26,8 @@
   button:hover:not(:disabled) { border-color:var(--accent); }
   button:disabled { opacity:.4; cursor:default; }
   label { color:var(--dim); display:flex; gap:4px; align-items:center; cursor:pointer; }
+  label.filebtn { color:var(--fg); background:#232a35; border:1px solid #323a49; border-radius:4px; padding:3px 9px; }
+  label.filebtn:hover { border-color:var(--accent); }
   #stage { flex:1; min-height:0; position:relative; }
   canvas { position:absolute; inset:0; width:100%; height:100%; display:block; touch-action:none; }
   #status { padding:6px 12px; background:var(--panel); color:var(--dim); white-space:pre-wrap; min-height:2.8em; }
@@ -64,6 +66,11 @@
     <button id="knock" disabled title="Then click a node: it is pushed away from the camera for half a second">Knock…</button>
     <button id="remove" disabled title="Cuts the bottom storey's columns at two corners (tower) or the middle bay (bridge)">Remove column</button>
     <button id="overload" disabled title="A load past what the structure carries: a roof weight (tower) or a 200 t truck (bridge)">Overload</button>
+  </div>
+  <div class="group"><span>Recording</span>
+    <button id="save" disabled title="Download the last run as a file: its commands and hash checkpoints">Save</button>
+    <label class="filebtn" title="Replay a saved recording on a fresh world and check its hashes">Load…<input type="file" id="load" accept=".rcrd" hidden></label>
+    <button id="sample" title="Replay a recording that ships with the page: the tower knocked over, 10 s">Replay sample</button>
   </div>
   <div class="group"><span>View</span>
     <label><input type="checkbox" id="nodes"> nodes</label>

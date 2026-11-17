@@ -43,4 +43,5 @@ for (const [from, to] of vendored) {
 }
 // The sample the "Replay sample" button plays: the same file the tests replay.
 copyFileSync(join(root, 'test', 'fixtures', 'weak-bridge.rcrd'), join(dist, 'web', 'weak-bridge.rcrd'));
+copyFileSync(join(root, 'test', 'fixtures', 'tower-collapse.rcrd'), join(dist, 'web', 'tower-collapse.rcrd'));
 console.log('built dist/web (open /web/index.html or /web/terrain.html from a server: pnpm serve)');

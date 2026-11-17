@@ -12,7 +12,7 @@
  */
 
 import { STRONG_BRIDGE } from './bridge.ts';
-import type { CommandBatch } from './commands.ts';
+import { CommandBatch } from './commands.ts';
 import { GRAVITY, locateTruck, type Deck, type Material, type Truck } from './design.ts';
 import { compileTerrain, plainTerrain, valleyTerrain, type Terrain } from './terrain.ts';
 
@@ -345,6 +345,22 @@ export interface ArmedAction {
 /** An aimed knock: the scene's knock force on one node, along `(dx, 0, dz)`, for the knock's duration. */
 function aimedKnock(batch: CommandBatch, aim: NonNullable<ArmedAction['aim']>, force: number, k: number): void {
   if (k >= 0 && k < Math.round(0.5 * 60)) batch.addForce(aim.node, force * aim.dx, 0, force * aim.dz);
+}
+
+/**
+ * Which standard scene a recording's setup list (list 0) builds, or `null` for anything else. The
+ * page needs the scene to draw the terrain and size its meshes, and the recording does not say:
+ * the setup bytes are the answer, because the standard scenes always compile to the same list.
+ */
+export function identifyScene(setup: Uint8Array): { scene: 'tower' | 'bridge'; layout: TowerLayout | BridgeLayout3 } | null {
+  const same = (a: Uint8Array, b: Uint8Array): boolean => a.byteLength === b.byteLength && a.every((v, i) => v === b[i]);
+  const tower = new CommandBatch();
+  const towerLayout = buildTower(tower);
+  if (same(setup, tower.bytes)) return { scene: 'tower', layout: towerLayout };
+  const bridge = new CommandBatch();
+  const bridgeLayout = buildBridge3(bridge);
+  if (same(setup, bridge.bytes)) return { scene: 'bridge', layout: bridgeLayout };
+  return null;
 }
 
 /** The tower's commands for step `step` of a live run; `armed` null is nothing happening. */
