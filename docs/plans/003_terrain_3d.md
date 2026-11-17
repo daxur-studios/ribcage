@@ -76,7 +76,7 @@ Order: 3.1 → 3.2 → 3.3 → 3.4 → 3.5, then 3.6 and 3.8 can run side by sid
   **Test:** in Node: the rest pose reproduces the mesh exactly, a rotated and moved lattice gives the rotated and moved mesh (within 1e-6 m), a stretched one the stretched mesh; a CPU reference of the shader maths agrees with `src/skin.ts`. By eye: panels bend with the bridge under the truck and tilt and fall with their cells as the tower collapses, with no panel left floating away from its cell. Ticks the roadmap check "meshes are skinned to the nodes and bend with them".
   Demo: the bridge deck flexing under the truck, close up, beams hidden.
 
-- [ ] **3.9 Milestone wrap.** Build with: Sonnet.
+- [x] **3.9 Milestone wrap.** Build with: Sonnet.
   Browser timing of both scenes (nodes, beams, contacts, substeps, ms per step), the milestone demo from the [demo plan](/docs/research/demo-and-media-plan.md) (a tower and a bridge collapse from two camera angles, the same collapse twice), the roadmap percentages, and the record closed with what milestone 4 should know (contact cost, anything that looked wrong).
 
 ## Not in this milestone

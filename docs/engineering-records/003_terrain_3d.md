@@ -149,3 +149,28 @@ tags: [milestone-3, terrain, contact, three, skinning]
 - **[decision]** **Tolerances:** 1e-12 at rest (float64 rounding), 1e-6 m under rotation and stretch (the plan's), 1e-4 between the 32-bit shader and the reference (32-bit floats near 60 m are 4e-6 m apart; a handful of roundings stays far below a millimetre).
 - **[decision]** **Panel sizes are drawing assumptions:** floor slabs inset 0.12 m and 0.16 m thick, wall bands 0.95 m tall standing 0.2 m out from the nodes, deck slabs 0.2 m thick with a 4 cm gap between bays. They only have to clear the drawn beams and read as floors, walls and a road.
 - **[question]** A panel whose cell is torn (a beam broken) still spans it and stretches with it; at the end of the bridge overload one deck slab is drawn long across a broken bay. It stays attached, so nothing floats, but milestone 9 should hide or tear such panels. The plan's close-up demo (the deck flexing under the truck, beams hidden) goes with the other demos in 3.9.
+
+## 2026-11-17 (phase 3.9, milestone wrap)
+
+- **[action]** Built by Sonnet. `web/viewer3d.ts`: the status line now shows the core's own time per step (mean and worst, measured around the one `stepOnce` call, so rendering is not in it), and a new hook `?stopat=N` pauses once at exactly step N whatever Pause did before (for a repeatable demo). New `core/examples/scene_stats.rs` replays `.rcrd` files natively and prints nodes, beams, substeps, ground contacts, ms per step and whether the final hash equals the recording's; `scripts/scene-recordings.mjs` records the tower and the bridge standing and under each action as the input (and times the WebAssembly core in Node). The boundary does not carry contact counts, so contacts come from the native replay (same commands, same counts).
+- **[action]** Timing, browser (a real Chrome tab, 900 steps, WebGPU and `?webgl=1`): both scenes run at 60 steps a second at 1x. Core time 0.19 to 0.28 ms per step on average, worst single step 1.2 to 2.2 ms (a garbage-collection or scheduling spike, not the physics). The state hashes at step 600 are equal under WebGPU, WebGL 2 and Node (tower standing 0xcd68c2f5e427610d, tower knocked 0xa33aaf9bc3c996da, bridge standing 0x2c29048eb5769d35, bridge overloaded 0xe3079146a8bd1473).
+- **[action]** Timing, native release, 900 steps, 20 substeps in every run (the rule's count; tower 28 nodes and 114 beams, bridge 34 nodes and 141 beams):
+
+  | run | mean ms | mean contacts per step (node plus beam midpoint) | contact solves as a share of beam solves |
+  | --- | --- | --- | --- |
+  | tower stand | 0.090 | 10.0 | 8.8% |
+  | tower knock | 0.092 | 12.1 | 10.8% |
+  | tower removeColumn | 0.084 | 7.1 | 6.8% |
+  | tower overload | 0.069 | 27.9 | 48.4% |
+  | bridge stand | 0.118 | 14.0 | 9.9% |
+  | bridge knock | 0.113 | 4.8 | 3.4% |
+  | bridge removeColumn | 0.108 | 9.4 | 7.1% |
+  | bridge overload | 0.079 | 21.5 | 30.2% |
+
+  Peaks: 25 node contacts at once (bridge overload) and 19 beam-midpoint contacts (tower knock); worst single step 0.27 ms. (Re-run on a quieter moment than the first pass, so the means differ from it by a few per cent.) Node-by-node WebAssembly in Node averages 0.10 to 0.16 ms. The native replays of all eight recordings end at the recorded hashes.
+- **[decision]** **Contact is cheap at this size.** The whole step costs about 0.1 ms, so even the worst share (about half of all beam solves, the tower lying on the terrain after the overload) leaves a small number. Milestone 4 does not need to optimise ground contact for craft of this size. What to watch is the share, not the milliseconds: contact solves per substep scale with nodes near the ground times substeps, and a rocket with a few hundred nodes lying on terrain will be where it shows. Re-measure there with `scene_stats`.
+- **[decision]** **No change to the boundary (ABI).** Exposing the step statistics through WebAssembly would change the boundary for a number that the native example already gives; left out.
+- **[action]** Demo, recorded headless (no window) with narration, kept local under `artifacts/videos/` (not committed): the tower knocked and collapsing live, then the recorded collapse from another camera angle ending at the same hash; the bridge under the 200 t truck from two camera angles, both ending at the same step-600 hash; the deck close up with the beams hidden.
+- **[question]** **Close-up of the deck under the normal truck shows nothing.** The 3 t standard truck moves the stiff deck about 5 mm at most, too small to see on screen. The close-up was recorded under the 200 t truck instead, where the slabs visibly follow their nodes down; the roadmap check does not depend on it. Milestone 4 should know that the standard bridge is far stiffer than the truck needs, so a flexing demo wants a lighter bridge or a heavier truck.
+- **[question]** **Anything that looked wrong:** (1) a panel over a broken beam stays attached and stretches across the gap (carried from 3.8, for milestone 9); (2) in the recordings the camera starts further back than it needs to for a close-up, so the demos zoom with the wheel; a closer start view per scene would help; (3) worst-step spikes of 1 to 2 ms are about ten times the mean; harmless at 16 ms, worth knowing before a frame budget is set; (4) headless Chrome renders WebGPU correctly, so demos need no visible window.
+- **[action]** `pnpm test` (72 pass, 1 slow skipped), `pnpm typecheck` and `cargo test` pass. Milestone 3 is done: all four checks were ticked in 3.4 to 3.8, so the wrap ticks none; overall stays 32%.

@@ -130,6 +130,10 @@ interface Run {
   windowSteps: number;
   windowStart: number;
   rate: number;
+  /** Wall time spent in the core's commands and step (not drawing): sum and worst, milliseconds, over `coreSteps` steps. */
+  coreMs: number;
+  coreMsMax: number;
+  coreSteps: number;
 }
 
 // ---- Three.js scene ------------------------------------------------------------------------
@@ -433,6 +437,9 @@ function startRun(name: SceneName, until = -1, action: ActionKind | null = null)
     windowSteps: 0,
     windowStart: performance.now(),
     rate: 0,
+    coreMs: 0,
+    coreMsMax: 0,
+    coreSteps: 0,
   };
   message = '';
   drawRun(run);
@@ -484,6 +491,9 @@ function startReplay(rec: Recording, label: string, until = -1): void {
     windowSteps: 0,
     windowStart: performance.now(),
     rate: 0,
+    coreMs: 0,
+    coreMsMax: 0,
+    coreSteps: 0,
   };
   message = '';
   drawRun(run);
@@ -500,6 +510,7 @@ function stopRun(): void {
 
 /** One fixed step: this scene's commands (the bridge's truck, an armed action), then the core's step. */
 function stepOnce(r: Run): void {
+  const t0 = performance.now();
   if (r.player) {
     const s = r.player.advance();
     if (s < 0) return;
@@ -510,6 +521,10 @@ function stepOnce(r: Run): void {
     else liveTowerCommands(batch, r.layout as TowerLayout, r.armed, r.step);
     r.substeps = r.recorder!.step(batch);
   }
+  const ms = performance.now() - t0;
+  r.coreMs += ms;
+  r.coreMsMax = Math.max(r.coreMsMax, ms);
+  r.coreSteps++;
   r.step++;
   r.windowSteps++;
 }
@@ -710,9 +725,13 @@ function updateText(): void {
   const action = run.armed ? ` · ${run.armed.kind}${run.armed.aim ? ' (aimed)' : ''} from step ${run.armed.start}` : '';
   statusEl.innerHTML =
     `<b>${state}</b> · ${run.scene}${action} · step ${run.step}${of} (${secs} s) · ${run.substeps} substeps · ` +
+    (run.coreSteps > 0 ? `core ${(run.coreMs / run.coreSteps).toFixed(2)} ms/step (worst ${run.coreMsMax.toFixed(2)}) · ` : '') +
     `${run.world.nodeCount} nodes, ${run.world.beamCount} beams · hash ${hash} · ${rendererName}${check}` +
     (aiming ? '\nKnock: click a node to push it away from the camera. Esc cancels.' : message ? `\n${message}` : '');
 }
+
+/** The `?stopat=N` hook: pause once, exactly at step N, whatever Pause did before (for a repeatable demo). -1 for none. */
+let stopAt = -1;
 
 function frame(now: number): void {
   const dt = Math.min(0.1, (now - last) / 1000);
@@ -723,10 +742,13 @@ function frame(now: number): void {
     run.owed = n === MAX_STEPS_PER_FRAME ? 0 : run.owed - n;
     const capped = n === MAX_STEPS_PER_FRAME;
     if (run.until >= 0) n = Math.min(n, run.until - run.step);
+    if (stopAt >= 0 && !run.player) n = Math.min(n, Math.max(0, stopAt - run.step));
     if (run.player) n = Math.min(n, run.total - run.step);
     advance(run, n);
     run.alpha = capped ? 1 : run.owed;
-    if ((run.until >= 0 && run.step >= run.until) || replayDone(run)) {
+    const reachedStop = stopAt >= 0 && !run.player && run.step >= stopAt;
+    if (reachedStop) stopAt = -1;
+    if ((run.until >= 0 && run.step >= run.until) || replayDone(run) || reachedStop) {
       run.playing = false;
       run.alpha = 1;
       syncButtons();
@@ -760,6 +782,8 @@ async function main(): Promise<void> {
   const steps = params.get('steps');
   const until = steps === null ? -1 : Math.max(0, Number(steps) | 0);
 
+  const stop = params.get('stopat');
+  if (stop !== null) stopAt = Math.max(0, Number(stop) | 0);
   const actionParam = params.get('action');
   const action: ActionKind | null = actionParam === 'knock' || actionParam === 'removeColumn' || actionParam === 'overload' ? actionParam : null;
   // `?beams=0` and `?panels=0` hide either, for a close look at the other.

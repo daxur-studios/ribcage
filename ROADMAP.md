@@ -1,6 +1,6 @@
 # ribcage roadmap
 
-**TL;DR.** Overall progress: **32%**. Now: milestones 1 (solver core and tools) and 2 (2D bridge builder) are complete; milestone 3 (3D on terrain in Three.js) is in progress (phases 3.1 to 3.8 done: terrain, ground contact, beam midpoints, the headless tower and bridge, the Three.js page, time controls and actions in 3D, record and replay in 3D, and panels skinned to the nodes; all four checks pass, the wrap 3.9 is left), planned in [Plan 003](docs/plans/003_terrain_3d.md). First playable slice ends at milestone 4.
+**TL;DR.** Overall progress: **32%**. Now: milestones 1 (solver core and tools), 2 (2D bridge builder) are complete, and so is milestone 3 (3D on terrain in Three.js): terrain, ground contact, a tower and a bridge that stand and collapse, the Three.js page with time controls, record and replay and panels skinned to the nodes (see [Plan 003](docs/plans/003_terrain_3d.md)). Next is milestone 4 (parts and assembly), which needs its plan first. First playable slice ends at milestone 4.
 
 This page is the single answer to "what are we building, and how far along is it?". The design is the [spec](docs/research/node-beam-engine-design-spec.md). The detailed work for the current milestone lives in its plan.
 
@@ -21,7 +21,7 @@ Each milestone has a weight (its share of the whole) and a short list of checks.
 | 0 | Scaffold | 2 | 100% | done |
 | 1 | Solver core and tools | 12 | 100% | done |
 | 2 | 2D bridge builder | 8 | 100% | done |
-| 3 | 3D on terrain in Three.js | 10 | 100% | in progress (wrap 3.9 left) |
+| 3 | 3D on terrain in Three.js | 10 | 100% | done |
 | 4 | Parts and assembly (first playable slice) | 12 | 0% | |
 | 5 | Rigid by default | 16 | 0% | |
 | 6 | Aerodynamics | 10 | 0% | |
