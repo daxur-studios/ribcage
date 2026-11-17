@@ -1,6 +1,6 @@
 # ribcage roadmap
 
-**TL;DR.** Overall progress: **22%**. Now: milestones 1 (solver core and tools) and 2 (2D bridge builder) are complete; milestone 3 (3D on terrain in Three.js) is next and has no plan yet. First playable slice ends at milestone 4.
+**TL;DR.** Overall progress: **22%**. Now: milestones 1 (solver core and tools) and 2 (2D bridge builder) are complete; milestone 3 (3D on terrain in Three.js) is next, planned in [Plan 003](docs/plans/003_terrain_3d.md). First playable slice ends at milestone 4.
 
 This page is the single answer to "what are we building, and how far along is it?". The design is the [spec](docs/research/node-beam-engine-design-spec.md). The detailed work for the current milestone lives in its plan.
 
@@ -38,7 +38,7 @@ A first guess, corrected as each milestone starts. "Plan" means writing that mil
 | --- | --- | --- | --- | --- |
 | 1 | Solver core and tools | planned (Fable) | Opus for the solver and cantilever; Sonnet for layout, hash, benchmark | Numerics that everything else rests on |
 | 2 | 2D bridge builder | Sonnet | Sonnet | Known patterns: WebAssembly wiring and a small editor |
-| 3 | 3D on terrain | Opus | Sonnet; Opus for mesh skinning | One hard part (skinning), the rest is porting |
+| 3 | 3D on terrain | planned (Opus) | Sonnet; Opus for ground contact and mesh skinning | Contact is reused by milestone 8; skinning is judged by eye; the rest is porting |
 | 4 | Parts and assembly | Opus | Sonnet for generators; Opus to tune the hard landing | Many small generators, one feel-critical test |
 | 5 | Rigid by default | [brief](docs/research/rigid-by-default-design-brief.md) done (Fable); phases by Opus | Opus | Hardest design: switching without adding energy, merging, splitting |
 | 6 | Aerodynamics | Opus | Sonnet; Opus for flutter and stability | Formulas are known, stability is not |
@@ -74,7 +74,7 @@ Planning has two stages. The costly-to-redo milestones (5 and 8) have an early d
 - [x] Beams are coloured by stress. (Blue in compression through grey to red at yield, purple once bent past yield, dashed when broken; `web/editor.ts`.)
 - [x] A recorded run replays exactly. (`src/recording.ts`: the command list per step plus a hash every 60 steps. The committed weak-bridge recording replays to the same hash in Node (`pnpm replay`, `test/recording.test.ts`) and in the editor; a changed command is caught at the first checkpoint after it; see ER 002, phase 2.4.)
 
-### 3. 3D on terrain in Three.js
+### 3. 3D on terrain in Three.js ([Plan 003](docs/plans/003_terrain_3d.md))
 
 - [ ] A tower and a bridge stand on height-map terrain with friction.
 - [ ] Both collapse believably when overloaded or knocked.
