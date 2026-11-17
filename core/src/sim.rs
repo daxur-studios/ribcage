@@ -1,6 +1,7 @@
 //! The fixed 60 Hz step and the state hash. The solve itself is in [`crate::solver`].
 //! Islands and nodes visited in ascending index order (determinism list).
 
+use crate::contact::find_contacts;
 use crate::event::Event;
 use crate::island::{build_islands, copy_back};
 use crate::real::{Real, Vec3};
@@ -27,6 +28,8 @@ pub struct StepStats {
     pub max_substeps: u32,
     /// Sum over islands of substeps times beams: the number of beam solves done.
     pub beam_solves: u64,
+    /// Ground contacts found this step, over all solved islands (each is solved every substep).
+    pub contacts: u32,
 }
 
 /// Same as [`step`] with an explicit substep rule, and a report. `SubstepRule::DEFAULT` is
@@ -59,6 +62,9 @@ fn step_inner(world: &mut World, choice: Choice) -> StepStats {
             isl.skipped = true;
             continue;
         }
+        if let Some(terrain) = &world.terrain {
+            find_contacts(isl, terrain);
+        }
         let n = match choice {
             Choice::Rule(rule) => substep_count_with(isl, rule),
             Choice::Fixed(n) => n,
@@ -76,6 +82,7 @@ fn step_inner(world: &mut World, choice: Choice) -> StepStats {
         stats.islands += 1;
         stats.max_substeps = stats.max_substeps.max(n);
         stats.beam_solves += n as u64 * isl.beam_a.len() as u64;
+        stats.contacts += isl.contact_node.len() as u32;
     }
     for isl in islands.iter().filter(|isl| !isl.skipped) {
         copy_back(world, isl);

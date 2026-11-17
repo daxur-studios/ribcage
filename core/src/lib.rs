@@ -4,6 +4,7 @@
 
 pub mod bench;
 pub mod command;
+pub mod contact;
 pub mod event;
 pub mod failure;
 pub mod ffi;

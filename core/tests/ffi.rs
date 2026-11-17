@@ -3,7 +3,7 @@
 //! builds give the same bits.
 
 use beam_core::bench::{bench_scene, BenchSpec};
-use beam_core::command::{apply_commands, Command, CMD_SET_TERRAIN, CMD_TERRAIN_HEIGHTS};
+use beam_core::command::{apply_commands, Command, CMD_ADD_BEAM, CMD_ADD_NODE, CMD_SET_TERRAIN, CMD_TERRAIN_HEIGHTS};
 use beam_core::event::{Event, EVENT_BREAK};
 use beam_core::ffi::*;
 use beam_core::real::Vec3;
@@ -138,6 +138,60 @@ fn terrain_through_the_boundary_matches_the_direct_world() {
         rc_step(h);
         assert_eq!(rc_state_hash(h), direct);
         assert_eq!(rc_state_hash(h), TERRAIN_ONLY, "golden: {:#018x}", rc_state_hash(h));
+        rc_host_free(h);
+    }
+}
+
+/// The terrain of [`TERRAIN_ONLY`] with things on it, after 120 steps: a triangle of three
+/// 10 kg nodes dropped onto the bumps, a node spawned under a slope, and a node spawned under
+/// the ground past the grid's corner (the flat edge rule). Covers landing, friction on a slope
+/// and recovery from overlap. The same records are built in `test/wasm.test.ts`.
+pub const TERRAIN_SCENE_120: u64 = 0x05e2_e896_a698_c2f5;
+
+fn terrain_scene_commands() -> Vec<Command> {
+    let rec = |kind, a, b, f| Command { kind, a, b, reserved: 0, f };
+    let mut cmds = terrain_commands();
+    for [x, y, z, inv_mass, radius] in
+        [[-1.0, 4.0, 3.0, 0.1, 0.2], [0.0, 4.0, 3.5, 0.1, 0.2], [-0.5, 4.8, 4.0, 0.1, 0.2], [3.5, 2.0, 6.5, 1.0, 0.1], [6.0, 1.0, 0.0, 1.0, 0.1]]
+    {
+        cmds.push(rec(CMD_ADD_NODE, 0, 0, [x, y, z, inv_mass, radius, 0.0]));
+    }
+    for (a, b) in [(0, 1), (1, 2), (2, 0)] {
+        cmds.push(rec(CMD_ADD_BEAM, a, b, [1.1, 1e-6, 50.0, 0.5, 1.0, 0.0]));
+    }
+    cmds
+}
+
+/// Ground contact gives the same bits through the boundary as applied directly, and matches
+/// the golden that the WebAssembly build is held to.
+#[test]
+fn terrain_scene_through_the_boundary_matches_the_direct_world() {
+    let cmds = terrain_scene_commands();
+    let mut w = World::new();
+    let mut results = Vec::new();
+    apply_commands(&mut w, &cmds, &mut results);
+    assert!(!results.contains(&u32::MAX), "a record was rejected: {results:?}");
+    for _ in 0..120 {
+        step(&mut w);
+    }
+    let direct = state_hash(&w);
+    // Everything ended on the ground: no node below its radius by more than a millimetre.
+    let t = w.terrain.as_ref().unwrap();
+    for i in 0..w.node_count() as usize {
+        let gap = t.plane_at(w.pos[i].x, w.pos[i].z).distance(w.pos[i]) - w.radius[i];
+        assert!(gap > -1e-3 && gap < 0.05, "node {i}: gap {gap}");
+    }
+
+    unsafe {
+        let h = rc_host_new();
+        let dst = rc_commands_reserve(h, cmds.len() as u32);
+        std::ptr::copy_nonoverlapping(cmds.as_ptr(), dst, cmds.len());
+        assert_eq!(rc_apply_commands(h), 0, "no record rejected");
+        for _ in 0..120 {
+            rc_step(h);
+        }
+        assert_eq!(rc_state_hash(h), direct);
+        assert_eq!(rc_state_hash(h), TERRAIN_SCENE_120, "golden: {:#018x}", rc_state_hash(h));
         rc_host_free(h);
     }
 }

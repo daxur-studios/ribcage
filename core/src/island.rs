@@ -17,6 +17,8 @@ pub struct Island {
     pub vel: Vec<Vec3>,
     pub inv_mass: Vec<Real>,
     pub force: Vec<Vec3>,
+    /// Contact sphere radius (ground contact, plan 003).
+    pub radius: Vec<Real>,
     // Per packed beam, ascending world index. Endpoints are packed node positions.
     pub beam_world: Vec<u32>,
     pub beam_a: Vec<u32>,
@@ -29,6 +31,13 @@ pub struct Island {
     pub break_strain: Vec<Real>,
     pub beam_flags: Vec<u32>,
     pub last_lambda: Vec<Real>,
+    // Ground contacts for this step ([`crate::contact::find_contacts`]), ascending packed node
+    // order. Each holds the plane `normal · p = offset` under its node for the whole step.
+    pub contact_node: Vec<u32>,
+    pub contact_normal: Vec<Vec3>,
+    pub contact_offset: Vec<Real>,
+    /// The ground's friction coefficient `μ` for this step's contacts.
+    pub friction: Real,
 }
 
 /// The island split: connected components of movable nodes.
@@ -145,6 +154,7 @@ fn pack(world: &World, nodes: &[u32], beams: &[u32], packed: &mut [u32], root: u
         island.vel.push(world.vel[u]);
         island.inv_mass.push(world.inv_mass[u]);
         island.force.push(world.force[u]);
+        island.radius.push(world.radius[u]);
     }
     for &b in beams {
         let u = b as usize;

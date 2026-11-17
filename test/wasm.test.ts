@@ -10,6 +10,8 @@ const SMALL_BENCH_120 = 0x935259e4d2c6ff87n;
 const HAND_BUILT_30 = 0xb62c7e7dd415f3a1n;
 /** A 5 by 4 terrain with heights `(k % 7) * 0.5`, one step (`TERRAIN_ONLY` in core/tests/ffi.rs). */
 const TERRAIN_ONLY = 0x424288d9b2e8abb4n;
+/** That terrain with a triangle and two lone nodes on it, after 120 steps (`TERRAIN_SCENE_120` in core/tests/ffi.rs). */
+const TERRAIN_SCENE_120 = 0x05e2e896a698c2f5n;
 /** End hash of the reported scene after 720 steps at the default rule (`cargo run --release -p beam-core --example bench`). */
 const STANDARD_BENCH_720 = 0x871092299f3cea56n;
 
@@ -72,6 +74,30 @@ test("a terrain-only world gives the native hash, and bad terrain records are re
   assert.deepEqual([...r.results], [REJECTED, 1]);
   assert.equal(r.rejected, 1);
   assert.notEqual(core.stateHash(h), TERRAIN_ONLY);
+  core.hostFree(h);
+});
+
+test("ground contact on terrain gives the native hash", async () => {
+  const core = await Core.load(loadBytes());
+  const h = core.hostNew();
+  const batch = new CommandBatch();
+  batch.setTerrain(5, 4, -4, 1, 2, 0.8);
+  batch.allTerrainHeights(Array.from({ length: 20 }, (_, k) => (k % 7) * 0.5));
+  const nodes: [number, number, number, number, number][] = [
+    [-1, 4, 3, 0.1, 0.2],
+    [0, 4, 3.5, 0.1, 0.2],
+    [-0.5, 4.8, 4, 0.1, 0.2],
+    [3.5, 2, 6.5, 1, 0.1],
+    [6, 1, 0, 1, 0.1],
+  ];
+  for (const [x, y, z, invMass, radius] of nodes) batch.addNode(x, y, z, invMass, radius);
+  for (const [a, b] of [[0, 1], [1, 2], [2, 0]]) {
+    batch.addBeam(a, b, { rest: 1.1, compliance: 1e-6, damping: 50, yieldStrain: 0.5, breakStrain: 1 });
+  }
+  assert.equal(core.applyCommands(h, batch).rejected, 0);
+  for (let i = 0; i < 120; i++) core.step(h);
+  assert.equal(core.stateHash(h), TERRAIN_SCENE_120);
+  assert.equal(core.events(h).length, 0);
   core.hostFree(h);
 });
 

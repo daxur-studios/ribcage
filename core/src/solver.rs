@@ -81,9 +81,121 @@ pub fn substep_count_with(isl: &Island, rule: SubstepRule) -> u32 {
     n
 }
 
-/// The one distance constraint (layout rule 6). In milestone 1 an endpoint is a plain node:
-/// `a` and `b` index `pos` and `inv_mass`. Returns `Δλ`; each endpoint moves along the beam by
-/// its inverse mass times `Δλ`, in opposite senses.
+/// One end of a correction (layout rule 6). Beams have two `Node` ends; a ground contact has a
+/// `Fixed` end (the ground, which never moves) and a `Node` end. Phase 3.3 adds a weighted point
+/// on a beam here, and milestone 5 a node riding on a rigid body; both only change
+/// [`Endpoint::weight`] and how [`apply_correction`] moves the end, never the callers' maths.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Endpoint {
+    /// A packed node: moves by its own inverse mass.
+    Node(u32),
+    /// Static ground: infinite mass, never moved.
+    Fixed,
+}
+
+impl Endpoint {
+    /// The end's resistance to a push: how far it moves per unit of `Δλ`.
+    #[inline(always)]
+    pub fn weight(self, inv_mass: &[Real]) -> Real {
+        match self {
+            Endpoint::Node(i) => inv_mass[i as usize],
+            Endpoint::Fixed => 0.0,
+        }
+    }
+}
+
+/// The correction kernel (layout rule 6): moves `a` by `-dir · (w_a · Δλ)` and `b` by
+/// `+dir · (w_b · Δλ)`, each end by its own weight. Every constraint in the solver (beams,
+/// ground contacts, friction) moves endpoints only through here. The arithmetic and its order
+/// are exactly those of the milestone 1 beam solve, so beams give the same bits as before.
+#[inline(always)]
+pub fn apply_correction(pos: &mut [Vec3], inv_mass: &[Real], a: Endpoint, b: Endpoint, dir: Vec3, dl: Real) {
+    if let Endpoint::Node(i) = a {
+        let i = i as usize;
+        pos[i] = pos[i] - dir * (inv_mass[i] * dl);
+    }
+    if let Endpoint::Node(i) = b {
+        let i = i as usize;
+        pos[i] = pos[i] + dir * (inv_mass[i] * dl);
+    }
+}
+
+/// Speed at which a ground contact may remove overlap that was already there when the substep
+/// began, in metres per second (the collision brief's recovery cap). Overlap created by this
+/// substep's own motion is removed in full.
+pub const RECOVERY_SPEED: Real = 2.0;
+
+/// One ground contact for one substep: the push, then friction (plan 003, phase 3.2).
+///
+/// The contact holds the plane `normal · p = offset` for the whole step. `p` is the node's
+/// position now (after the beams), `p0` its position at the substep's start, `radius` its
+/// sphere. With `d = radius − (normal · p − offset)` the overlap now and `d0` the same at `p0`:
+///
+/// - **Push.** The overlap allowed to remain is `max(0, d0 − RECOVERY_SPEED · h)`, so new
+///   overlap goes at once and old overlap drains at no more than the cap. If the overlap is
+///   larger, `Δλ_n = (d − allowed) / w` (rigid: no compliance), along the normal, push only.
+/// - **Split recovery.** The part of the push that removes old overlap (at most
+///   `d0 − allowed`) also moves `p0` along the normal, so the velocity derived from
+///   `(p − p0) / h` does not include it: a node dug out of the ground rises at up to the cap
+///   but does not leave it with that speed and hop. Only the part that stops the node's own
+///   motion into the ground changes its velocity.
+/// - **Friction.** The node's sideways slip over the substep, `s` (the part of `p − p0` along
+///   the plane, after the push), is cancelled by `Δλ_t = min(|s| / w, μ · Δλ_n)`: in full if
+///   that is within `μ` times the push (sticking), otherwise by `μ` times the push (sliding).
+///   One coefficient, static equals kinetic.
+///
+/// No push means no normal force and so no friction. Returns `Δλ_n` (zero when it did not push).
+#[allow(clippy::too_many_arguments)]
+#[inline]
+pub fn solve_ground_contact(
+    pos: &mut [Vec3],
+    inv_mass: &[Real],
+    node: u32,
+    p0: &mut Vec3,
+    radius: Real,
+    normal: Vec3,
+    offset: Real,
+    mu: Real,
+    h: Real,
+) -> Real {
+    let i = node as usize;
+    let (ground, end) = (Endpoint::Fixed, Endpoint::Node(node));
+    let w = ground.weight(inv_mass) + end.weight(inv_mass);
+    if w == 0.0 {
+        return 0.0;
+    }
+    let start = *p0;
+    let d = radius - (normal.dot(pos[i]) - offset);
+    let d0 = radius - (normal.dot(start) - offset);
+    let cap = RECOVERY_SPEED * h;
+    let allowed = if d0 > cap { d0 - cap } else { 0.0 };
+    #[allow(clippy::neg_cmp_op_on_partial_ord)] // also true for NaN: a bad number is not pushed
+    if !(d > allowed) {
+        return 0.0;
+    }
+    let push = d - allowed;
+    let dl_n = push / w;
+    apply_correction(pos, inv_mass, ground, end, normal, dl_n);
+    let old = d0 - allowed;
+    if old > 0.0 {
+        let recovered = if push < old { push } else { old };
+        *p0 = start + normal * recovered;
+    }
+    let moved = pos[i] - start;
+    let slip = moved - normal * normal.dot(moved);
+    let s = slip.length();
+    if s > 0.0 {
+        let full = s / w;
+        let limit = mu * dl_n;
+        let dl_t = if full <= limit { full } else { limit };
+        apply_correction(pos, inv_mass, ground, end, slip / s, -dl_t);
+    }
+    dl_n
+}
+
+/// The one distance constraint (layout rule 6). A beam endpoint is always a node: `a` and `b`
+/// index `pos` and `inv_mass`. Returns `Δλ`; the ends move along the beam through
+/// [`apply_correction`], by inverse mass times `Δλ`, in opposite senses.
 ///
 /// `C` is current length minus rest, `w` the sum of inverse masses and `α = compliance / h²`:
 ///
@@ -143,8 +255,7 @@ pub fn solve_distance(
             yielded = true;
         }
     }
-    pos[a] = pos[a] - dir * (wa * dl);
-    pos[b] = pos[b] + dir * (wb * dl);
+    apply_correction(pos, inv_mass, Endpoint::Node(a as u32), Endpoint::Node(b as u32), dir, dl);
     (dl, yielded)
 }
 
@@ -256,6 +367,21 @@ pub fn solve_island(isl: &mut Island, n: u32, max_speed: Real) -> SolveOutput {
                 isl.beam_flags[k] |= BEAM_YIELDED;
             }
             isl.last_lambda[k] = -dl / (h * h);
+        }
+        // Ground contacts after the beams, in ascending packed node order (phase 3.2).
+        for c in 0..isl.contact_node.len() {
+            let i = isl.contact_node[c];
+            solve_ground_contact(
+                &mut isl.pos,
+                &isl.inv_mass,
+                i,
+                &mut prev[i as usize],
+                isl.radius[i as usize],
+                isl.contact_normal[c],
+                isl.contact_offset[c],
+                isl.friction,
+                h,
+            );
         }
         for i in 0..nodes {
             if isl.inv_mass[i] == 0.0 {
