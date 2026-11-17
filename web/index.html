@@ -17,6 +17,8 @@
   button:disabled { opacity:.4; cursor:default; }
   button.on { background:var(--accent); border-color:var(--accent); color:#06121f; }
   label { color:var(--dim); display:flex; gap:4px; align-items:center; cursor:pointer; }
+  label.filebtn { color:var(--fg); background:#232a35; border:1px solid #323a49; border-radius:4px; padding:3px 9px; }
+  label.filebtn:hover { border-color:var(--accent); }
   #stage { flex:1; min-height:0; position:relative; }
   canvas { position:absolute; inset:0; width:100%; height:100%; display:block; touch-action:none; }
   #status { padding:6px 12px; background:var(--panel); color:var(--dim); white-space:pre-wrap; min-height:2.8em; }
@@ -56,6 +58,11 @@
       <option value="0.1">0.1×</option>
     </select>
     <label><input type="checkbox" id="truck" checked> truck</label>
+  </div>
+  <div class="group"><span>Recording</span>
+    <button id="save" disabled title="Download the last run as a file: its commands and hash checkpoints">Save</button>
+    <label class="filebtn" title="Replay a saved recording on a fresh world and check its hashes">Load…<input type="file" id="load" accept=".rcrd" hidden></label>
+    <button id="sample" title="Replay a recording that ships with the page: the weak bridge, 10 s">Replay sample</button>
   </div>
 </div>
 <div id="stage">

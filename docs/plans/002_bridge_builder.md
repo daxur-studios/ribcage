@@ -23,7 +23,7 @@ Each phase ends with passing tests, ticks the matching check in the [roadmap](/R
 - [x] 2.1 The core as WebAssembly: a C-style boundary (`core/src/ffi.rs`), a `wasm32` build, a loader in `src/`, and a Node test showing the benchmark scene gives the same state hash as the native build. Also the first WebAssembly timing. (Proven in Node; the roadmap check "in the browser" is ticked in 2.3, when a page loads it.)
 - [x] 2.2 The host world in TypeScript: typed views that survive memory growth, the command buffer in (rule 8), events and render positions out, and a headless bridge scene with a load that rolls across. A strong bridge holds it and an under-built bridge breaks. (Done: `core/src/command.rs`, `src/commands.ts`, `src/world.ts`, `src/bridge.ts`, `test/bridge.test.ts`, `core/tests/commands.rs`.)
 - [x] 2.3 Editor page: place nodes and beams with the mouse, run, pause, single-step and slow down time; beams coloured by stress. Browser build step chosen here: plain `tsc` emit, no bundler. (Done: `web/index.html`, `web/editor.ts`, `src/design.ts`, `scripts/build-web.mjs`, `scripts/serve.mjs`, `tsconfig.web.json`, `test/design.test.ts`. Run it with `pnpm build:web` then `pnpm serve`, and open the address it prints.)
-- [ ] 2.4 Record and replay: the command lists per step are saved, and a replay gives the same state hash, in Node and in the browser.
+- [x] 2.4 Record and replay: the command lists per step are saved, and a replay gives the same state hash, in Node and in the browser. (Done: `src/recording.ts`, `test/recording.test.ts`, `test/fixtures/weak-bridge.rcrd`, `scripts/replay.mjs`, and Save, Load… and Replay sample in the editor.)
 
 ## Open questions
 

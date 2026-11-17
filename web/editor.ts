@@ -24,6 +24,7 @@ import {
   type Material,
 } from '../src/design.ts';
 import { bridgeDesign, STRONG_BRIDGE, WEAK_BRIDGE } from '../src/bridge.ts';
+import { decodeRecording, encodeRecording, Player, Recorder, type Recording } from '../src/recording.ts';
 import { World, type Snapshot } from '../src/world.ts';
 
 type Tool = 'node' | 'beam' | 'pin' | 'delete';
@@ -54,10 +55,20 @@ const speedSel = $<HTMLSelectElement>('speed');
 const truckBox = $<HTMLInputElement>('truck');
 const materialSel = $<HTMLSelectElement>('material');
 const toolButtons = [...document.querySelectorAll<HTMLButtonElement>('[data-tool]')];
+const saveBtn = $<HTMLButtonElement>('save');
+const loadInput = $<HTMLInputElement>('load');
+const sampleBtn = $<HTMLButtonElement>('sample');
 
 interface Run {
   world: World;
   deck: Deck;
+  /** A live run is recorded as it goes; a replay has a player instead. */
+  recorder: Recorder | null;
+  player: Player | null;
+  /** What a replay is of (shown in the status line). */
+  label: string;
+  /** Steps in the recording being replayed (0 for a live run). */
+  total: number;
   /** Steps taken so far (also the index of the next step). */
   step: number;
   playing: boolean;
@@ -77,6 +88,8 @@ let tool: Tool = 'node';
 let pending = -1;
 let hover: { x: number; y: number } | null = null;
 let run: Run | null = null;
+/** The last live run that was stopped, kept so it can still be saved. */
+let lastRecording: Recording | null = null;
 let message = '';
 
 // ---- view -----------------------------------------------------------------------------------
@@ -227,10 +240,12 @@ function startRun(): void {
     message = 'Add nodes and beams first (or load the Bridge).';
     return;
   }
+  stopRun();
   const world = new World(core);
   const batch = new CommandBatch();
   compileDesign(batch, design, material);
-  const result = world.apply(batch);
+  const recorder = new Recorder(world);
+  const result = recorder.setup(batch);
   if (result.rejected > 0) {
     message = `The core refused ${result.rejected} of the commands; the design was not started.`;
     world.free();
@@ -239,6 +254,41 @@ function startRun(): void {
   run = {
     world,
     deck: deckOf(design),
+    recorder,
+    player: null,
+    label: '',
+    total: 0,
+    step: 0,
+    playing: true,
+    owed: 0,
+    yielded: 0,
+    broken: 0,
+    substeps: 0,
+    snap: world.snapshot(),
+  };
+  pending = -1;
+  message = '';
+  syncButtons();
+}
+
+/** Replays a recording on a fresh world, starting to play at once. */
+function startReplay(rec: Recording, label: string): void {
+  stopRun();
+  const world = new World(core);
+  const player = new Player(world, rec);
+  const result = player.start();
+  if (result.rejected > 0) {
+    message = `The core refused ${result.rejected} of the recorded setup commands.`;
+    world.free();
+    return;
+  }
+  run = {
+    world,
+    deck: { ids: [], xs: [] },
+    recorder: null,
+    player,
+    label,
+    total: rec.steps,
     step: 0,
     playing: true,
     owed: 0,
@@ -253,22 +303,70 @@ function startRun(): void {
 }
 
 function stopRun(): void {
+  if (run?.recorder && run.recorder.steps > 0) lastRecording = run.recorder.finish();
   run?.world.free();
   run = null;
   syncButtons();
 }
 
-/** One fixed step: the truck's weight as commands, then the core's step, then its events. */
+/** One fixed step: the truck's weight as commands, then the core's step, then its events. A replay takes its commands from the recording instead. */
 function stepOnce(r: Run): void {
-  const batch = new CommandBatch();
-  if (truckBox.checked) rollLoad(batch, r.deck, STANDARD_TRUCK, r.step);
-  if (batch.count > 0) r.world.apply(batch);
-  r.substeps = r.world.step();
+  if (r.player) {
+    const s = r.player.advance();
+    if (s < 0) return;
+    r.substeps = s;
+  } else {
+    const batch = new CommandBatch();
+    if (truckBox.checked) rollLoad(batch, r.deck, STANDARD_TRUCK, r.step);
+    r.substeps = r.recorder!.step(batch);
+  }
   for (const e of r.world.events()) {
     if (e.kind === EVENT_YIELD) r.yielded++;
     else if (e.kind === EVENT_BREAK) r.broken++;
   }
   r.step++;
+  if (r.player?.done) {
+    r.playing = false;
+    syncButtons();
+  }
+}
+
+function currentRecording(): Recording | null {
+  if (run?.recorder) return run.recorder.steps > 0 ? run.recorder.finish() : null;
+  return run ? null : lastRecording;
+}
+
+function saveRecording(): void {
+  const rec = currentRecording();
+  if (!rec) return;
+  const blob = new Blob([encodeRecording(rec) as Uint8Array<ArrayBuffer>], { type: 'application/octet-stream' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `ribcage-${rec.steps}-steps.rcrd`;
+  a.click();
+  URL.revokeObjectURL(a.href);
+  message = `Saved ${rec.steps} steps (${blob.size} bytes).`;
+}
+
+function openRecording(bytes: Uint8Array, label: string): void {
+  try {
+    startReplay(decodeRecording(bytes), label);
+  } catch (e) {
+    message = `Could not open ${label}: ${e instanceof Error ? e.message : String(e)}`;
+  }
+}
+
+async function replaySample(): Promise<void> {
+  const res = await fetch('./weak-bridge.rcrd');
+  if (!res.ok) {
+    message = `could not load the sample recording (${res.status})`;
+    return;
+  }
+  openRecording(new Uint8Array(await res.arrayBuffer()), 'sample (weak bridge)');
+}
+
+function syncSave(): void {
+  saveBtn.disabled = currentRecording() === null;
 }
 
 function syncButtons(): void {
@@ -276,7 +374,8 @@ function syncButtons(): void {
   runBtn.textContent = running ? 'Stop' : 'Run';
   pauseBtn.disabled = !running;
   pauseBtn.textContent = run && !run.playing ? 'Resume' : 'Pause';
-  stepBtn.disabled = run === null || run.playing;
+  stepBtn.disabled = run === null || run.playing || (run.player?.done ?? false);
+  truckBox.disabled = run?.player != null;
   for (const b of toolButtons) b.disabled = running;
   $<HTMLButtonElement>('preset-bridge').disabled = running;
   $<HTMLButtonElement>('clear').disabled = running;
@@ -426,7 +525,7 @@ function draw(): void {
 
 /** The truck: a box riding on the deck between the two deck nodes its weight is split over. */
 function drawTruck(r: Run, at: (i: number) => [number, number]): void {
-  if (!truckBox.checked) return;
+  if (!truckBox.checked || r.player) return; // a replay carries the loads as forces, not as a design to draw them from
   const loc = locateTruck(r.deck, STANDARD_TRUCK, r.step);
   if (!loc) return;
   const [ax, ay] = at(r.deck.ids[loc.bay]!);
@@ -453,9 +552,22 @@ function hex(n: bigint): string {
 function updateText(): void {
   if (run) {
     const secs = (run.step * STEP_SECONDS).toFixed(2);
+    const p = run.player;
+    const state = p ? (p.done ? 'replay finished' : run.playing ? 'replaying' : 'replay paused') : run.playing ? 'running' : 'paused';
+    const of = p ? ` of ${run.total}` : '';
+    const verdict = p
+      ? p.mismatch
+        ? `\nDIFFERS from the recording at step ${p.mismatch.step}: expected ${hex(p.mismatch.expected)}, got ${hex(p.mismatch.actual)}`
+        : p.rejected > 0
+          ? `\nthe core refused ${p.rejected} recorded commands`
+          : p.done
+            ? '\nidentical to the recording: every checkpoint and the final hash match'
+            : '\nidentical to the recording so far'
+      : '';
     statusEl.innerHTML =
-      `<b>${run.playing ? 'running' : 'paused'}</b> · step ${run.step} (${secs} s) · ${run.substeps} substeps · ` +
+      `<b>${state}</b>${p ? ` ${run.label}` : ''} · step ${run.step}${of} (${secs} s) · ${run.substeps} substeps · ` +
       `yielded ${run.yielded} · broken ${run.broken} · hash ${hex(run.world.stateHash)}` +
+      verdict +
       (message ? `\n${message}` : '');
     hintEl.textContent = '';
   } else {
@@ -492,6 +604,7 @@ function frame(now: number): void {
   }
   draw();
   updateText();
+  syncSave();
   requestAnimationFrame(frame);
 }
 
@@ -520,6 +633,13 @@ async function main(): Promise<void> {
   runBtn.addEventListener('click', () => (run ? stopRun() : startRun()));
   pauseBtn.addEventListener('click', togglePause);
   stepBtn.addEventListener('click', singleStep);
+  saveBtn.addEventListener('click', saveRecording);
+  sampleBtn.addEventListener('click', () => void replaySample());
+  loadInput.addEventListener('change', () => {
+    const file = loadInput.files?.[0];
+    loadInput.value = '';
+    if (file) void file.arrayBuffer().then((b) => openRecording(new Uint8Array(b), file.name));
+  });
   canvas.addEventListener('pointerdown', pointerDown);
   canvas.addEventListener('pointermove', pointerMove);
   canvas.addEventListener('pointerleave', () => (hover = null));

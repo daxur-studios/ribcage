@@ -23,4 +23,6 @@ execFileSync(process.execPath, [tsc, '-p', join(root, 'tsconfig.web.json')], { s
 mkdirSync(join(dist, 'web'), { recursive: true });
 copyFileSync(join(root, 'web', 'index.html'), join(dist, 'web', 'index.html'));
 copyFileSync(wasm, join(dist, 'web', 'beam_core.wasm'));
+// The sample the "Replay sample" button plays: the same file the tests replay.
+copyFileSync(join(root, 'test', 'fixtures', 'weak-bridge.rcrd'), join(dist, 'web', 'weak-bridge.rcrd'));
 console.log('built dist/web (open /web/index.html from a server: pnpm serve)');
