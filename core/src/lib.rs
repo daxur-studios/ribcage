@@ -12,6 +12,7 @@ pub mod maths;
 pub mod real;
 pub mod sim;
 pub mod solver;
+pub mod terrain;
 pub mod world;
 
 use real::Real;

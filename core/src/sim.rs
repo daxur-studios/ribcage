@@ -134,6 +134,7 @@ fn mix_vec(h: &mut u64, v: Vec3) {
 
 /// FNV-1a over the raw bits of positions, velocities, rest lengths and flags, in index
 /// order, plus the step count. Dead slots are included so slot reuse is part of the state.
+/// The terrain (size, origin, cell, friction and every height) follows, if there is one.
 pub fn state_hash(world: &World) -> u64 {
     let mut h = FNV_OFFSET;
     mix(&mut h, world.step_count);
@@ -147,6 +148,21 @@ pub fn state_hash(world: &World) -> u64 {
     for i in 0..world.rest.len() {
         mix_real(&mut h, world.rest[i]);
         mix(&mut h, world.beam_flags[i] as u64);
+    }
+    // The ground, only when there is one: a world with no terrain hashes as it did before
+    // terrain existed (the golden recording and the benchmark hashes depend on that). Every
+    // height goes in each time; the hash is taken at checkpoints, not per step, so there is no
+    // cached checksum to get out of step.
+    if let Some(t) = &world.terrain {
+        mix(&mut h, t.nx as u64);
+        mix(&mut h, t.nz as u64);
+        mix_real(&mut h, t.x0);
+        mix_real(&mut h, t.z0);
+        mix_real(&mut h, t.cell);
+        mix_real(&mut h, t.friction);
+        for &height in &t.heights {
+            mix_real(&mut h, height);
+        }
     }
     h
 }

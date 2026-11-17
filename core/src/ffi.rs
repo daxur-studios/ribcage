@@ -24,8 +24,10 @@ use crate::real::{Real, Vec3};
 use crate::sim::{state_hash, step};
 use crate::world::{BeamSpec, World};
 
-/// Bumped by any change to an exported function's signature or to a record layout.
-pub const ABI_VERSION: u32 = 2;
+/// Bumped by any change to an exported function's signature, to a record layout or to the set of
+/// command kinds. 3 added the terrain commands (kinds 7 and 8); nothing else changed, so a
+/// recording made at ABI 2 still means the same thing and replays (`src/recording.ts`).
+pub const ABI_VERSION: u32 = 3;
 
 /// Bytes per command record, for the host to check against its own layout.
 #[no_mangle]

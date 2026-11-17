@@ -21,6 +21,8 @@ import { ABI_VERSION, type ApplyResult } from './core.ts';
 import { World } from './world.ts';
 
 export const FORMAT_VERSION = 1;
+/** The oldest core ABI whose recordings still replay (2: before the terrain commands). */
+export const MIN_READABLE_ABI = 2;
 const MAGIC = [0x52, 0x43, 0x52, 0x44]; // "RCRD"
 const HEADER_BYTES = 40;
 
@@ -224,7 +226,10 @@ export function decodeRecording(bytes: Uint8Array): Recording {
   const format = v.getUint32(4, true);
   if (format !== FORMAT_VERSION) throw new Error(`recording format ${format}, this build reads ${FORMAT_VERSION}`);
   const abi = v.getUint32(8, true);
-  if (abi !== ABI_VERSION) throw new Error(`recorded with core ABI ${abi}, this build has ${ABI_VERSION}`);
+  // ABI 3 only added command kinds (the terrain), so every ABI 2 list means the same thing in it.
+  if (abi < MIN_READABLE_ABI || abi > ABI_VERSION) {
+    throw new Error(`recorded with core ABI ${abi}, this build reads ABI ${MIN_READABLE_ABI} to ${ABI_VERSION}`);
+  }
   const recBytes = v.getUint32(12, true);
   if (recBytes !== COMMAND_BYTES) throw new Error(`recorded with ${recBytes}-byte records, this build uses ${COMMAND_BYTES}`);
   const steps = v.getUint32(16, true);

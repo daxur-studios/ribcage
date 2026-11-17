@@ -4,6 +4,7 @@
 
 use crate::event::Event;
 use crate::real::{Real, Vec3};
+use crate::terrain::Terrain;
 use std::cmp::Reverse;
 use std::collections::BinaryHeap;
 
@@ -78,6 +79,10 @@ pub struct World {
     /// Nodes that were clamped to `max_speed` in the last step, each counted once however many
     /// substeps clamped it. Reset every step. A debugging number; there is no event for it.
     pub clamped_nodes: u32,
+    /// The ground, if any. Read-only for the solver; it changes only through the terrain commands
+    /// ([`crate::command`]). `None` means no ground, and then the world hashes and steps exactly
+    /// as it did before terrain existed.
+    pub terrain: Option<Terrain>,
 }
 
 impl Default for World {
@@ -107,6 +112,7 @@ impl Default for World {
             step_count: 0,
             max_speed: DEFAULT_MAX_SPEED,
             clamped_nodes: 0,
+            terrain: None,
         }
     }
 }

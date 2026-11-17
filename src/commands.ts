@@ -15,6 +15,13 @@ export const CMD_DELETE_NODE = 3;
 export const CMD_DELETE_BEAM = 4;
 export const CMD_ADD_FORCE = 5;
 export const CMD_SET_INV_MASS = 6;
+export const CMD_SET_TERRAIN = 7;
+export const CMD_TERRAIN_HEIGHTS = 8;
+
+/** Most grid points along one side of a terrain (`terrain::MAX_GRID`). */
+export const MAX_TERRAIN_GRID = 257;
+/** Most heights one `CMD_TERRAIN_HEIGHTS` record carries. */
+export const HEIGHTS_PER_RECORD = 6;
 
 /** The result slot of a rejected record (`command::REJECTED`). */
 export const REJECTED = 0xffff_ffff;
@@ -110,5 +117,28 @@ export class CommandBatch {
   /** Zero pins the node; anything else frees it with that inverse mass. */
   setInvMass(node: number, invMass: number): number {
     return this.#push(CMD_SET_INV_MASS, node, 0, [invMass]);
+  }
+
+  /**
+   * Sets a flat terrain (all heights zero) of `nx` by `nz` points, `cell` metres apart, its first
+   * point at `(x0, z0)`, with one friction coefficient. Replaces any terrain the world had.
+   */
+  setTerrain(nx: number, nz: number, x0: number, z0: number, cell: number, friction: number): number {
+    return this.#push(CMD_SET_TERRAIN, nx, nz, [x0, z0, cell, friction]);
+  }
+
+  /** Writes up to six heights starting at grid index `start` (`i + j * nx`). */
+  terrainHeights(start: number, heights: readonly number[]): number {
+    if (heights.length < 1 || heights.length > HEIGHTS_PER_RECORD) {
+      throw new Error(`a terrain record carries 1 to ${HEIGHTS_PER_RECORD} heights, not ${heights.length}`);
+    }
+    return this.#push(CMD_TERRAIN_HEIGHTS, start, heights.length, heights);
+  }
+
+  /** The whole height array as records of six (the last may be shorter), in index order. */
+  allTerrainHeights(heights: ArrayLike<number>): void {
+    for (let i = 0; i < heights.length; i += HEIGHTS_PER_RECORD) {
+      this.terrainHeights(i, Array.from({ length: Math.min(HEIGHTS_PER_RECORD, heights.length - i) }, (_, k) => heights[i + k]!));
+    }
   }
 }

@@ -3,6 +3,7 @@
 //! builds give the same bits.
 
 use beam_core::bench::{bench_scene, BenchSpec};
+use beam_core::command::{apply_commands, Command, CMD_SET_TERRAIN, CMD_TERRAIN_HEIGHTS};
 use beam_core::event::{Event, EVENT_BREAK};
 use beam_core::ffi::*;
 use beam_core::real::Vec3;
@@ -98,6 +99,45 @@ fn events_are_readable_in_place() {
         let e: Event = *rc_events_ptr(h);
         assert_eq!((e.kind, e.index, e.step), (EVENT_BREAK, 0, 1));
         assert_eq!(std::mem::size_of::<Event>(), 24);
+        rc_host_free(h);
+    }
+}
+
+/// A terrain-only world: 5 by 4 points, 2 m apart from (-4, 1), friction 0.8, heights
+/// `(k % 7) * 0.5` for grid index k. The same records are built in `test/wasm.test.ts`.
+pub const TERRAIN_ONLY: u64 = 0x424288d9b2e8abb4;
+
+fn terrain_commands() -> Vec<Command> {
+    let rec = |kind, a, b, f| Command { kind, a, b, reserved: 0, f };
+    let mut cmds = vec![rec(CMD_SET_TERRAIN, 5, 4, [-4.0, 1.0, 2.0, 0.8, 0.0, 0.0])];
+    let all: Vec<f64> = (0..20).map(|k| (k % 7) as f64 * 0.5).collect();
+    for (n, chunk) in all.chunks(6).enumerate() {
+        let mut f = [0.0; 6];
+        f[..chunk.len()].copy_from_slice(chunk);
+        cmds.push(rec(CMD_TERRAIN_HEIGHTS, n as u32 * 6, chunk.len() as u32, f));
+    }
+    cmds
+}
+
+/// Terrain sent through the boundary hashes the same as terrain applied directly.
+#[test]
+fn terrain_through_the_boundary_matches_the_direct_world() {
+    let cmds = terrain_commands();
+    let mut w = World::new();
+    let mut results = Vec::new();
+    apply_commands(&mut w, &cmds, &mut results);
+    assert!(results.iter().all(|&r| r == 1));
+    step(&mut w);
+    let direct = state_hash(&w);
+
+    unsafe {
+        let h = rc_host_new();
+        let dst = rc_commands_reserve(h, cmds.len() as u32);
+        std::ptr::copy_nonoverlapping(cmds.as_ptr(), dst, cmds.len());
+        assert_eq!(rc_apply_commands(h), 0, "no record rejected");
+        rc_step(h);
+        assert_eq!(rc_state_hash(h), direct);
+        assert_eq!(rc_state_hash(h), TERRAIN_ONLY, "golden: {:#018x}", rc_state_hash(h));
         rc_host_free(h);
     }
 }

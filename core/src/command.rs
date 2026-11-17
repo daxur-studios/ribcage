@@ -8,6 +8,7 @@
 //! is deterministic, so a replay rejects the same ones.
 
 use crate::real::{Real, Vec3};
+use crate::terrain::{Terrain, MAX_GRID};
 use crate::world::{BeamSpec, World, BEAM_ALIVE};
 
 /// `f[0..5]` = x, y, z, inverse mass (0 pins), radius. Result: the new node's index.
@@ -23,6 +24,16 @@ pub const CMD_DELETE_BEAM: u32 = 4;
 pub const CMD_ADD_FORCE: u32 = 5;
 /// `a` = node; `f[0]` = inverse mass (0 pins, anything else frees). Result: 1.
 pub const CMD_SET_INV_MASS: u32 = 6;
+/// Sets the terrain (plan 003, phase 3.1): `a` = points along x, `b` = points along z (each 2 to
+/// [`MAX_GRID`]); `f[0..4]` = x of the first point, z of the first point, cell size in metres
+/// (above zero), friction coefficient (zero or more). All heights start at zero, and any terrain
+/// there was is replaced. Result: 1.
+pub const CMD_SET_TERRAIN: u32 = 7;
+/// Writes heights into the terrain: `a` = index of the first height (`i + j * nx`), `b` = how many
+/// (1 to 6), `f[0..b]` = the heights in metres. Rejected, and nothing written, when there is no
+/// terrain, the count is out of range, the run goes past the last height or a height is not a
+/// finite number. Result: 1.
+pub const CMD_TERRAIN_HEIGHTS: u32 = 8;
 
 /// Result slot value for a rejected record.
 pub const REJECTED: u32 = u32::MAX;
@@ -115,6 +126,27 @@ fn apply_one(w: &mut World, c: &Command) -> u32 {
                 return REJECTED;
             }
             w.set_inv_mass(c.a, c.f[0]);
+            1
+        }
+        CMD_SET_TERRAIN => {
+            let [x0, z0, cell, friction, _, _] = c.f;
+            let sizes_ok = (2..=MAX_GRID).contains(&c.a) && (2..=MAX_GRID).contains(&c.b);
+            if !sizes_ok || !finite(&c.f[0..4]) || cell <= 0.0 || friction < 0.0 {
+                return REJECTED;
+            }
+            w.terrain = Some(Terrain::flat(c.a, c.b, x0, z0, cell, friction));
+            1
+        }
+        CMD_TERRAIN_HEIGHTS => {
+            let Some(t) = w.terrain.as_mut() else {
+                return REJECTED;
+            };
+            let count = c.b as usize;
+            let start = c.a as usize;
+            if !(1..=6).contains(&count) || start + count > t.height_count() || !finite(&c.f[0..count]) {
+                return REJECTED;
+            }
+            t.heights[start..start + count].copy_from_slice(&c.f[0..count]);
             1
         }
         _ => REJECTED,

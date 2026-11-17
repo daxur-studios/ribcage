@@ -36,7 +36,7 @@ Each phase ends with passing tests (`cargo test`, `pnpm test`, `pnpm typecheck`)
 
 Order: 3.1 → 3.2 → 3.3 → 3.4 → 3.5, then 3.6 and 3.8 can run side by side (different files), then 3.7, then 3.9.
 
-- [ ] **3.1 Terrain in the core.** Build with: Sonnet.
+- [x] **3.1 Terrain in the core.** Build with: Sonnet.
   `core/src/terrain.rs`: the grid, `height_at(x, z)` and `plane_at(x, z)` (the triangle's unit normal and offset) with the fixed diagonal and the flat edge rule; only `+ − × ÷`, `sqrt` and `floor` (exact by IEEE 754; not on the lint's list). The terrain lives in `World` as read-only data. Two command kinds, `CMD_SET_TERRAIN` and `CMD_TERRAIN_HEIGHTS` (start index, six heights; rejected past the grid end or for a non-finite height), mirrored in `src/commands.ts`. Heights and grid size join the state hash. `ABI_VERSION` 3; the recording decoder also accepts ABI 2 files, because ABI 3 only adds command kinds.
   **Test:** heights and normals are exact on a tilted plane and at grid points, the diagonal split is the documented one, outside the grid is the edge height; bad terrain records are rejected and the rest of the batch applies; the committed `weak-bridge.rcrd` (ABI 2) still replays to `0xb580a6d8faa6610d`; a terrain-only world hashes the same natively and in WebAssembly (`core/tests/ffi.rs`, `test/wasm.test.ts`).
   Demo: skip (nothing to see yet).
