@@ -61,7 +61,7 @@ Order: 3.1 → 3.2 → 3.3 → 3.4 → 3.5, then 3.6 and 3.8 can run side by sid
   **Test:** the pure parts in Node (beam instance transforms from two end points, colour scale shared with 2D); in the browser both scenes stand on the terrain, and after a fixed number of steps the page shows the same hash as Node; no console errors.
   Demo: an orbit around the tower and the bridge standing on the terrain.
 
-- [ ] **3.6 Time controls and actions in 3D.** Build with: Sonnet.
+- [x] **3.6 Time controls and actions in 3D.** Build with: Sonnet.
   Pause, single step, the five speeds and the step clock from the 2D editor. Drawing interpolates between the last two render buffers (render only; the core is never stepped by frame time). The actions from 3.4 on buttons, with knock aimed by clicking a node (a ray pick against node spheres).
   **Test:** interpolation and picking maths in Node; by hand: each action collapses its scene, speeds match their step rates as in ER 002, and stress colours change as load builds. Ticks the roadmap checks "both collapse believably when overloaded or knocked" (with 3.4's tests) and "the stress colours and time controls work in 3D".
   Demo: the tower knocked over and the bridge failing under the truck, at ¼ speed.

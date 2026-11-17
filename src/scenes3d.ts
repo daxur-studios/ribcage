@@ -306,20 +306,67 @@ export function rollTruck3(batch: CommandBatch, layout: BridgeLayout3, truck: Tr
  * - overload: the heavy truck.
  */
 export function bridgeAction(batch: CommandBatch, layout: BridgeLayout3, kind: ActionKind | null, step: number, light: Truck): void {
-  const mid = layout.spec.bays >> 1;
   if (kind === 'overload') {
     if (step >= ACTION_START_STEP) rollTruck3(batch, layout, HEAVY_TRUCK, step - ACTION_START_STEP);
     return;
   }
   rollTruck3(batch, layout, light, step);
   if (kind === null || step < ACTION_START_STEP) return;
-  const k = step - ACTION_START_STEP;
+  bridgeCut(batch, layout, kind, step - ACTION_START_STEP);
+}
+
+/** The knock and the cut of `bridgeAction`, `k` steps after the action began. */
+function bridgeCut(batch: CommandBatch, layout: BridgeLayout3, kind: ActionKind, k: number): void {
+  const mid = layout.spec.bays >> 1;
   if (kind === 'knock') {
     if (k < Math.round(BRIDGE_KNOCK_SECONDS * 60)) {
       for (let s = 0; s < 2; s++) batch.addForce(layout.deck(s, mid), 0, 0, BRIDGE_KNOCK_FORCE / 2);
     }
-  } else if (k === 0) {
+  } else if (kind === 'removeColumn' && k === 0) {
     for (const b of layout.deckDiagonals(mid)) batch.deleteBeam(b);
     for (let s = 0; s < 2; s++) batch.deleteBeam(layout.chord(s, mid));
   }
+}
+
+// ------------------------------------------------------------------------------------------
+// Actions on a live run (the 3D page)
+
+/**
+ * An action armed on a live run: which, the step it began on, and for a knock the node that was
+ * clicked and the horizontal direction it is pushed (a unit `(dx, dz)`). Pressing a button arms it
+ * at the step the run is on; arming at `ACTION_START_STEP` gives exactly the headless action.
+ */
+export interface ArmedAction {
+  kind: ActionKind;
+  start: number;
+  aim?: { node: number; dx: number; dz: number };
+}
+
+/** An aimed knock: the scene's knock force on one node, along `(dx, 0, dz)`, for the knock's duration. */
+function aimedKnock(batch: CommandBatch, aim: NonNullable<ArmedAction['aim']>, force: number, k: number): void {
+  if (k >= 0 && k < Math.round(0.5 * 60)) batch.addForce(aim.node, force * aim.dx, 0, force * aim.dz);
+}
+
+/** The tower's commands for step `step` of a live run; `armed` null is nothing happening. */
+export function liveTowerCommands(batch: CommandBatch, layout: TowerLayout, armed: ArmedAction | null, step: number): void {
+  if (armed === null) return;
+  if (armed.aim) aimedKnock(batch, armed.aim, TOWER_KNOCK_FORCE, step - armed.start);
+  else towerAction(batch, layout, armed.kind, step - armed.start + ACTION_START_STEP);
+}
+
+/**
+ * The bridge's commands for step `step` of a live run: the light truck crosses from step 0; an
+ * action acts from the step it was armed on. An overload brings the heavy truck on from there and
+ * takes the light one off the deck.
+ */
+export function liveBridgeCommands(batch: CommandBatch, layout: BridgeLayout3, armed: ArmedAction | null, step: number, light: Truck): void {
+  const k = armed === null ? -1 : step - armed.start;
+  if (armed !== null && k >= 0 && armed.kind === 'overload') {
+    rollTruck3(batch, layout, HEAVY_TRUCK, k);
+    return;
+  }
+  rollTruck3(batch, layout, light, step);
+  if (armed === null || k < 0) return;
+  if (armed.aim) aimedKnock(batch, armed.aim, BRIDGE_KNOCK_FORCE, k);
+  else bridgeCut(batch, layout, armed.kind, k);
 }

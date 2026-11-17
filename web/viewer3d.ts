@@ -13,6 +13,7 @@
 import {
   AmbientLight,
   BufferAttribute,
+  BoxGeometry,
   BufferGeometry,
   Color,
   CylinderGeometry,
@@ -33,15 +34,20 @@ import {
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { CommandBatch } from '../src/commands.ts';
 import { BEAM_ALIVE, BEAM_BROKEN, BEAM_YIELDED, Core } from '../src/core.ts';
-import { STANDARD_TRUCK, STEP_SECONDS } from '../src/design.ts';
-import { newPlacement, placeBeam, terrainTriangles } from '../src/render3d.ts';
+import { locateTruck, STANDARD_TRUCK, STEP_SECONDS, type Truck } from '../src/design.ts';
+import { lerpPositions, newPlacement, pickNode, placeBeam, terrainTriangles } from '../src/render3d.ts';
 import {
-  bridgeAction,
+  ACTION_START_STEP,
   buildBridge3,
   buildTower,
+  HEAVY_TRUCK,
+  liveBridgeCommands,
+  liveTowerCommands,
   MEMBER,
   STANDARD_BRIDGE3,
   STANDARD_TOWER,
+  type ActionKind,
+  type ArmedAction,
   type BridgeLayout3,
   type TowerLayout,
 } from '../src/scenes3d.ts';
@@ -69,6 +75,15 @@ const runBtn = $<HTMLButtonElement>('run');
 const stopBtn = $<HTMLButtonElement>('stop');
 const nodesBox = $<HTMLInputElement>('nodes');
 const resetViewBtn = $<HTMLButtonElement>('reset-view');
+const pauseBtn = $<HTMLButtonElement>('pause');
+const stepBtn = $<HTMLButtonElement>('step');
+const speedSel = $<HTMLSelectElement>('speed');
+const knockBtn = $<HTMLButtonElement>('knock');
+const removeBtn = $<HTMLButtonElement>('remove');
+const overloadBtn = $<HTMLButtonElement>('overload');
+
+/** Radius of the sphere a click picks a node with, metres (the drawn node is smaller and hard to hit). */
+const PICK_RADIUS = 0.5;
 
 interface Run {
   world: World;
@@ -81,7 +96,19 @@ interface Run {
   /** Stop playing after this many steps (the `?steps=` hook), or -1. */
   until: number;
   substeps: number;
+  /** The render buffer after the last step, and the one before it (drawing blends the two). */
   snap: Snapshot;
+  prev: Float32Array;
+  /** How far between `prev` and `snap` the drawing is, 0 to 1. */
+  alpha: number;
+  /** What is drawn now: `prev` and `snap` blended. */
+  drawn: Float32Array;
+  /** The action that was started on this run, if any. */
+  armed: ArmedAction | null;
+  /** Steps taken in the current one-second window, and the rate measured over the last one. */
+  windowSteps: number;
+  windowStart: number;
+  rate: number;
 }
 
 // ---- Three.js scene ------------------------------------------------------------------------
@@ -109,6 +136,18 @@ const VIEWS: Record<SceneName, { from: [number, number, number]; to: [number, nu
 let terrainMesh: Mesh | null = null;
 let beamMesh: InstancedMesh | null = null;
 let nodeMesh: InstancedMesh | null = null;
+
+/** The bridge's truck: a box on the deck (the heavy one is bigger and red). Drawing only. */
+const truckMesh = new Mesh(new BoxGeometry(1, 1, 1), new MeshStandardMaterial({ color: 0xe8b24a, roughness: 0.6 }));
+truckMesh.visible = false;
+scene.add(truckMesh);
+const TRUCK_SIZE = { light: [2.4, 1.1, 1.5], heavy: [4.2, 1.9, 2.2] } as const;
+/** The node a knock would hit, shown while aiming. */
+const aimMesh = new Mesh(new SphereGeometry(PICK_RADIUS, 16, 12), new MeshStandardMaterial({ color: 0xff9a3c, transparent: true, opacity: 0.55, roughness: 0.4 }));
+aimMesh.visible = false;
+scene.add(aimMesh);
+/** True while the next click on a node knocks it. */
+let aiming = false;
 let core: Core;
 let run: Run | null = null;
 let message = '';
@@ -167,10 +206,10 @@ const tmpS = new Vector3();
 const tmpC = new Color();
 const HIDDEN = new Matrix4().makeScale(0, 0, 0);
 
-/** Copies a snapshot into the instance buffers. */
-function drawSnapshot(s: Snapshot): void {
+/** Copies a snapshot's beams and flags, with node positions `positions` (blended between steps), into the instance buffers. */
+function drawSnapshot(s: Snapshot, positions: Float32Array): void {
   if (!beamMesh || !nodeMesh) return;
-  const { positions, beams, nodeFlags } = s;
+  const { beams, nodeFlags } = s;
   const n = beams.flags.length;
   for (let i = 0; i < n; i++) {
     const f = beams.flags[i]!;
@@ -201,6 +240,45 @@ function drawSnapshot(s: Snapshot): void {
   }
 }
 
+/** Draws the run's current picture: the two last render buffers blended, the truck, the aim marker. */
+function drawRun(r: Run): void {
+  let positions = r.snap.positions;
+  if (r.playing && r.alpha < 1) {
+    lerpPositions(r.prev, r.snap.positions, r.alpha, r.drawn);
+    positions = r.drawn;
+  }
+  drawSnapshot(r.snap, positions);
+  drawTruck(r, positions);
+}
+
+/** The truck sits on the deck at the time the drawing is at (the last applied step, plus how far into the next). */
+function drawTruck(r: Run, positions: Float32Array): void {
+  truckMesh.visible = false;
+  if (r.scene !== 'bridge') return;
+  const layout = r.layout as BridgeLayout3;
+  const heavy = r.armed?.kind === 'overload' && r.step > r.armed.start;
+  const truck: Truck = heavy ? HEAVY_TRUCK : STANDARD_TRUCK;
+  const t0 = r.step - 1 + (r.playing ? r.alpha : 1) - (heavy ? r.armed!.start : 0);
+  if (t0 < 0) return;
+  const at = locateTruck(layout.rail, truck, t0);
+  if (at === null) return;
+  let x = 0;
+  let y = 0;
+  let z = 0;
+  for (let s = 0; s < 2; s++) {
+    const a = layout.deck(s, at.bay) * 3;
+    const b = layout.deck(s, at.bay + 1) * 3;
+    x += (positions[a]! * (1 - at.t) + positions[b]! * at.t) / 2;
+    y += (positions[a + 1]! * (1 - at.t) + positions[b + 1]! * at.t) / 2;
+    z += (positions[a + 2]! * (1 - at.t) + positions[b + 2]! * at.t) / 2;
+  }
+  const [sx, sy, sz] = heavy ? TRUCK_SIZE.heavy : TRUCK_SIZE.light;
+  truckMesh.scale.set(sx, sy, sz);
+  truckMesh.position.set(x, y + MEMBER.radius + sy / 2, z);
+  (truckMesh.material as MeshStandardMaterial).color.setHex(heavy ? 0xd9523e : 0xe8b24a);
+  truckMesh.visible = true;
+}
+
 function resetView(): void {
   const v = VIEWS[(run?.scene ?? (sceneSel.value as SceneName))];
   camera.position.set(...v.from);
@@ -220,8 +298,9 @@ function resize(): void {
 
 // ---- running -------------------------------------------------------------------------------
 
-function startRun(name: SceneName, until = -1): void {
+function startRun(name: SceneName, until = -1, action: ActionKind | null = null): void {
   stopRun();
+  setAiming(false);
   const world = new World(core);
   const batch = new CommandBatch();
   const layout = name === 'tower' ? buildTower(batch, STANDARD_TOWER) : buildBridge3(batch, STANDARD_BRIDGE3);
@@ -234,9 +313,27 @@ function startRun(name: SceneName, until = -1): void {
   showTerrain(layout.terrain);
   makeInstances(layout.nodeCount, layout.beamCount);
   const snap = world.snapshot();
-  run = { world, scene: name, layout, step: 0, playing: until !== 0, owed: 0, until, substeps: 0, snap };
+  run = {
+    world,
+    scene: name,
+    layout,
+    step: 0,
+    playing: until !== 0,
+    owed: 0,
+    until,
+    substeps: 0,
+    snap,
+    prev: snap.positions,
+    alpha: 1,
+    drawn: new Float32Array(snap.positions.length),
+    // `?action=` starts an action at the standard step, which is exactly the headless action.
+    armed: action === null ? null : { kind: action, start: ACTION_START_STEP },
+    windowSteps: 0,
+    windowStart: performance.now(),
+    rate: 0,
+  };
   message = '';
-  drawSnapshot(snap);
+  drawRun(run);
   resetView();
   syncButtons();
 }
@@ -247,18 +344,129 @@ function stopRun(): void {
   syncButtons();
 }
 
-/** One fixed step: the bridge's truck as commands, then the core's step. */
+/** One fixed step: this scene's commands (the bridge's truck, an armed action), then the core's step. */
 function stepOnce(r: Run): void {
   const batch = new CommandBatch();
-  if (r.scene === 'bridge') bridgeAction(batch, r.layout as BridgeLayout3, null, r.step, STANDARD_TRUCK);
+  if (r.scene === 'bridge') liveBridgeCommands(batch, r.layout as BridgeLayout3, r.armed, r.step, STANDARD_TRUCK);
+  else liveTowerCommands(batch, r.layout as TowerLayout, r.armed, r.step);
   r.world.apply(batch);
   r.substeps = r.world.step();
   r.step++;
+  r.windowSteps++;
+}
+
+/** Takes `n` steps and refreshes the two buffers drawing blends; `prev` is the picture before the last step. */
+function advance(r: Run, n: number): void {
+  if (n <= 0) return;
+  for (let i = 0; i < n; i++) {
+    if (i === n - 1) r.prev = i === 0 ? r.snap.positions : r.world.snapshot().positions;
+    stepOnce(r);
+  }
+  r.snap = r.world.snapshot();
+}
+
+function setPaused(paused: boolean): void {
+  if (!run) return;
+  run.playing = !paused;
+  run.owed = 0;
+  run.until = -1;
+  run.alpha = 1;
+  drawRun(run);
+  syncButtons();
+}
+
+function singleStep(): void {
+  if (!run || run.playing) return;
+  run.until = -1;
+  advance(run, 1);
+  run.alpha = 1;
+  drawRun(run);
+}
+
+/** Starts an action on the run, at the step it is on. */
+function arm(kind: ActionKind, aim?: ArmedAction['aim']): void {
+  if (!run || run.armed) return;
+  run.armed = aim ? { kind, start: run.step, aim } : { kind, start: run.step };
+  message = `${kind === 'knock' ? 'knock' : kind === 'removeColumn' ? 'column removed' : 'overload'} at step ${run.step}`;
+  setAiming(false);
+  syncButtons();
+}
+
+function setAiming(on: boolean): void {
+  aiming = on && run !== null && run.armed === null;
+  aimMesh.visible = false;
+  knockBtn.textContent = aiming ? 'Knock: click a node' : 'Knock…';
+  canvas.style.cursor = aiming ? 'crosshair' : '';
 }
 
 function syncButtons(): void {
   runBtn.textContent = run ? 'Restart' : 'Run';
   stopBtn.disabled = run === null;
+  pauseBtn.disabled = run === null;
+  pauseBtn.textContent = run && !run.playing ? 'Resume' : 'Pause';
+  stepBtn.disabled = run === null || run.playing;
+  const free = run !== null && run.armed === null;
+  knockBtn.disabled = !free;
+  removeBtn.disabled = !free;
+  overloadBtn.disabled = !free;
+}
+
+// ---- picking -------------------------------------------------------------------------------
+
+const ndc = new Vector3();
+const rayOrigin = new Vector3();
+const rayDir = new Vector3();
+
+/** The node under the pointer (client coordinates), or -1. */
+function nodeAt(clientX: number, clientY: number): number {
+  if (!run) return -1;
+  const r = canvas.getBoundingClientRect();
+  ndc.set(((clientX - r.left) / r.width) * 2 - 1, -((clientY - r.top) / r.height) * 2 + 1, 0.5);
+  camera.updateMatrixWorld();
+  ndc.unproject(camera);
+  rayOrigin.copy(camera.position);
+  rayDir.copy(ndc).sub(rayOrigin).normalize();
+  const positions = run.playing && run.alpha < 1 ? run.drawn : run.snap.positions;
+  return pickNode(positions, run.snap.nodeFlags, PICK_RADIUS, rayOrigin.x, rayOrigin.y, rayOrigin.z, rayDir.x, rayDir.y, rayDir.z);
+}
+
+/** Knocks the node that was clicked, away from the camera along the ground. */
+function knockNode(node: number): void {
+  const look = camera.getWorldDirection(rayDir);
+  const len = Math.hypot(look.x, look.z);
+  // Straight down or up has no ground direction: fall back to +x.
+  const dx = len > 1e-6 ? look.x / len : 1;
+  const dz = len > 1e-6 ? look.z / len : 0;
+  arm('knock', { node, dx, dz });
+}
+
+let downAt: { x: number; y: number } | null = null;
+
+function onPointerDown(e: PointerEvent): void {
+  downAt = { x: e.clientX, y: e.clientY };
+}
+
+/** A press and release within a few pixels is a click; a longer drag was the camera's. */
+function onPointerUp(e: PointerEvent): void {
+  const d = downAt;
+  downAt = null;
+  if (!aiming || !d || e.button !== 0) return;
+  if (Math.hypot(e.clientX - d.x, e.clientY - d.y) > 5) return;
+  const node = nodeAt(e.clientX, e.clientY);
+  if (node >= 0) knockNode(node);
+  else message = 'No node there: click on a joint.';
+}
+
+function onPointerMove(e: PointerEvent): void {
+  if (!aiming || !run) return;
+  const node = nodeAt(e.clientX, e.clientY);
+  if (node < 0) {
+    aimMesh.visible = false;
+    return;
+  }
+  const p = run.playing && run.alpha < 1 ? run.drawn : run.snap.positions;
+  aimMesh.position.set(p[node * 3]!, p[node * 3 + 1]!, p[node * 3 + 2]!);
+  aimMesh.visible = true;
 }
 
 // ---- frame loop ----------------------------------------------------------------------------
@@ -272,27 +480,37 @@ function updateText(): void {
   }
   const secs = (run.step * STEP_SECONDS).toFixed(2);
   const hash = '0x' + run.world.stateHash.toString(16).padStart(16, '0');
+  const state = run.playing ? `running ${speedSel.options[speedSel.selectedIndex]!.text} (${run.rate.toFixed(0)} steps/s)` : 'paused';
+  const action = run.armed ? ` · ${run.armed.kind}${run.armed.aim ? ' (aimed)' : ''} from step ${run.armed.start}` : '';
   statusEl.innerHTML =
-    `<b>${run.playing ? 'running' : 'paused'}</b> · ${run.scene} · step ${run.step} (${secs} s) · ${run.substeps} substeps · ` +
+    `<b>${state}</b> · ${run.scene}${action} · step ${run.step} (${secs} s) · ${run.substeps} substeps · ` +
     `${run.world.nodeCount} nodes, ${run.world.beamCount} beams · hash ${hash} · ${rendererName}` +
-    (message ? `\n${message}` : '');
+    (aiming ? '\nKnock: click a node to push it away from the camera. Esc cancels.' : message ? `\n${message}` : '');
 }
 
 function frame(now: number): void {
   const dt = Math.min(0.1, (now - last) / 1000);
   last = now;
   if (run?.playing) {
-    run.owed += dt * 60;
+    run.owed += dt * Number(speedSel.value) * 60;
     let n = Math.min(MAX_STEPS_PER_FRAME, Math.floor(run.owed));
     run.owed = n === MAX_STEPS_PER_FRAME ? 0 : run.owed - n;
+    const capped = n === MAX_STEPS_PER_FRAME;
     if (run.until >= 0) n = Math.min(n, run.until - run.step);
-    for (let i = 0; i < n; i++) stepOnce(run);
-    if (n > 0) {
-      run.snap = run.world.snapshot();
-      drawSnapshot(run.snap);
+    advance(run, n);
+    run.alpha = capped ? 1 : run.owed;
+    if (run.until >= 0 && run.step >= run.until) {
+      run.playing = false;
+      run.alpha = 1;
+      syncButtons();
     }
-    if (run.until >= 0 && run.step >= run.until) run.playing = false;
+    if (now - run.windowStart >= 1000) {
+      run.rate = (run.windowSteps * 1000) / (now - run.windowStart);
+      run.windowSteps = 0;
+      run.windowStart = now;
+    }
   }
+  if (run) drawRun(run);
   controls.update();
   void renderer.render(scene, camera);
   updateText();
@@ -314,21 +532,44 @@ async function main(): Promise<void> {
   if (wanted === 'tower' || wanted === 'bridge') sceneSel.value = wanted;
   const steps = params.get('steps');
 
+  const actionParam = params.get('action');
+  const action: ActionKind | null = actionParam === 'knock' || actionParam === 'removeColumn' || actionParam === 'overload' ? actionParam : null;
+  const speed = params.get('speed');
+  if (speed !== null && [...speedSel.options].some((o) => o.value === speed)) speedSel.value = speed;
+
   sceneSel.addEventListener('change', () => startRun(sceneSel.value as SceneName));
   runBtn.addEventListener('click', () => startRun(sceneSel.value as SceneName));
   stopBtn.addEventListener('click', () => {
     stopRun();
+    setAiming(false);
     message = 'Stopped.';
   });
+  pauseBtn.addEventListener('click', () => run && setPaused(run.playing));
+  stepBtn.addEventListener('click', singleStep);
+  knockBtn.addEventListener('click', () => setAiming(!aiming));
+  removeBtn.addEventListener('click', () => arm('removeColumn'));
+  overloadBtn.addEventListener('click', () => arm('overload'));
   nodesBox.addEventListener('change', () => {
     if (nodeMesh) nodeMesh.visible = nodesBox.checked;
-    if (run) drawSnapshot(run.snap);
+    if (run) drawRun(run);
   });
   resetViewBtn.addEventListener('click', resetView);
   window.addEventListener('resize', resize);
+  canvas.addEventListener('pointerdown', onPointerDown);
+  canvas.addEventListener('pointerup', onPointerUp);
+  canvas.addEventListener('pointermove', onPointerMove);
+  window.addEventListener('keydown', (e) => {
+    if (e.target instanceof HTMLSelectElement) return;
+    if (e.key === ' ') {
+      if (e.target instanceof HTMLButtonElement) return; // the button's own click does it
+      e.preventDefault();
+      if (run) setPaused(run.playing);
+    } else if (e.key === '.') singleStep();
+    else if (e.key === 'Escape') setAiming(false);
+  });
 
   resize();
-  startRun(sceneSel.value as SceneName, steps === null ? -1 : Math.max(0, Number(steps) | 0));
+  startRun(sceneSel.value as SceneName, steps === null ? -1 : Math.max(0, Number(steps) | 0), action);
   requestAnimationFrame(frame);
 }
 

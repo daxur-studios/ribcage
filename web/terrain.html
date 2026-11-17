@@ -49,6 +49,22 @@
     <button id="run">Run</button>
     <button id="stop" disabled>Stop</button>
   </div>
+  <div class="group"><span>Time</span>
+    <button id="pause" disabled title="space">Pause</button>
+    <button id="step" disabled title=". : one step (1/60 s)">Step</button>
+    <select id="speed" title="Simulation speed">
+      <option value="2">2×</option>
+      <option value="1" selected>1×</option>
+      <option value="0.5">½×</option>
+      <option value="0.25">¼×</option>
+      <option value="0.1">0.1×</option>
+    </select>
+  </div>
+  <div class="group"><span>Action</span>
+    <button id="knock" disabled title="Then click a node: it is pushed away from the camera for half a second">Knock…</button>
+    <button id="remove" disabled title="Cuts the bottom storey's columns at two corners (tower) or the middle bay (bridge)">Remove column</button>
+    <button id="overload" disabled title="A load past what the structure carries: a roof weight (tower) or a 200 t truck (bridge)">Overload</button>
+  </div>
   <div class="group"><span>View</span>
     <label><input type="checkbox" id="nodes"> nodes</label>
     <button id="reset-view" title="Back to the starting view">Reset view</button>
@@ -56,7 +72,7 @@
 </div>
 <div id="stage">
   <canvas id="view"></canvas>
-  <div id="hint">Drag to orbit, wheel to zoom, right-drag to pan.</div>
+  <div id="hint">Drag to orbit, wheel to zoom, right-drag to pan. Space pauses, . steps once.</div>
   <div id="legend">
     <div>beam stress (strain ÷ yield)</div>
     <div class="ramp"></div>

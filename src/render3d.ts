@@ -85,6 +85,58 @@ export function rotateBy(q: BeamPlacement, vx: number, vy: number, vz: number): 
 }
 
 /**
+ * Node positions part of the way between two render buffers: `out = prev + alpha * (curr - prev)`.
+ * Drawing only: the core is stepped by whole fixed steps, never by frame time. A node that has the
+ * same place in both stays exactly there; `alpha` outside 0 to 1 is held to it.
+ */
+export function lerpPositions(prev: ArrayLike<number>, curr: ArrayLike<number>, alpha: number, out: Float32Array | Float64Array): void {
+  const a = alpha < 0 ? 0 : alpha > 1 ? 1 : alpha;
+  const n = Math.min(curr.length, out.length);
+  for (let i = 0; i < n; i++) {
+    const c = curr[i]!;
+    const p = i < prev.length ? prev[i]! : c;
+    out[i] = p + a * (c - p);
+  }
+}
+
+/**
+ * The nearest live node whose sphere of `radius` the ray from `(ox, oy, oz)` along the unit
+ * direction `(dx, dy, dz)` hits in front of its origin, or -1. `alive` says which slots hold a node
+ * (bit 0 of the core's node flags).
+ */
+export function pickNode(
+  positions: ArrayLike<number>,
+  alive: ArrayLike<number>,
+  radius: number,
+  ox: number,
+  oy: number,
+  oz: number,
+  dx: number,
+  dy: number,
+  dz: number,
+): number {
+  let best = -1;
+  let bestT = Infinity;
+  for (let i = 0; i < alive.length; i++) {
+    if (!(alive[i]! & 1)) continue;
+    const cx = positions[i * 3]! - ox;
+    const cy = positions[i * 3 + 1]! - oy;
+    const cz = positions[i * 3 + 2]! - oz;
+    const along = cx * dx + cy * dy + cz * dz; // distance to the closest approach
+    const off2 = cx * cx + cy * cy + cz * cz - along * along; // squared distance from the ray's line
+    const inside = radius * radius - off2;
+    if (inside < 0) continue;
+    const t = along - Math.sqrt(inside); // where the ray enters the sphere
+    const hit = t >= 0 ? t : along + Math.sqrt(inside) >= 0 ? 0 : -1; // origin inside: hit at once
+    if (hit >= 0 && hit < bestT) {
+      bestT = hit;
+      best = i;
+    }
+  }
+  return best;
+}
+
+/**
  * The terrain as triangles: one vertex per grid point (`x`, height, `z`) and two triangles per
  * cell, split along the diagonal from `(i, j)` to `(i + 1, j + 1)` as the core splits them, wound
  * so the normal points up (+y).
