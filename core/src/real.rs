@@ -5,12 +5,18 @@
 pub type Real = f64;
 
 /// Three components, always. A planar scene keeps `z` at zero.
+///
+/// `repr(C)`: the host reads arrays of these straight out of WebAssembly memory as three
+/// consecutive `Real`s per node ([`crate::ffi`]), so the layout is part of the boundary.
+#[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Default)]
 pub struct Vec3 {
     pub x: Real,
     pub y: Real,
     pub z: Real,
 }
+
+const _: () = assert!(std::mem::size_of::<Vec3>() == 3 * std::mem::size_of::<Real>());
 
 impl Vec3 {
     pub const ZERO: Vec3 = Vec3 { x: 0.0, y: 0.0, z: 0.0 };

@@ -122,11 +122,22 @@ impl BenchScene {
     /// Pushes the top ring sideways for the coming step: `10 N · sin(2π · step / 120)` on each top
     /// node along x, through [`World::add_force`]. A function of the step counter only.
     pub fn apply_load(&mut self) {
-        let phase = (self.world.step_count % GUST_PERIOD) as Real / GUST_PERIOD as Real;
-        let f = Vec3::new(GUST_N * sin(TAU * phase), 0.0, 0.0);
-        for &n in &self.top_nodes {
-            self.world.add_force(n, f);
-        }
+        apply_gust(&mut self.world, &self.top_nodes);
+    }
+
+    /// The world and the nodes the load acts on, for a host that owns the world itself
+    /// ([`crate::ffi`]).
+    pub fn into_parts(self) -> (World, Vec<u32>) {
+        (self.world, self.top_nodes)
+    }
+}
+
+/// The scene's load on `top_nodes`, as a function of `world.step_count` only.
+pub fn apply_gust(world: &mut World, top_nodes: &[u32]) {
+    let phase = (world.step_count % GUST_PERIOD) as Real / GUST_PERIOD as Real;
+    let f = Vec3::new(GUST_N * sin(TAU * phase), 0.0, 0.0);
+    for &n in top_nodes {
+        world.add_force(n, f);
     }
 }
 

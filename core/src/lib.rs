@@ -5,6 +5,7 @@
 pub mod bench;
 pub mod event;
 pub mod failure;
+pub mod ffi;
 pub mod island;
 pub mod maths;
 pub mod real;

@@ -66,9 +66,9 @@ Planning has two stages. The costly-to-redo milestones (5 and 8) have an early d
 - [x] A bad number freezes the structure and reports, instead of spreading. (Per island; other islands stay bit-identical; `core/tests/guards.rs`.)
 - [x] A benchmark scene reports beams, substeps and milliseconds per step. (`cargo run --release -p beam-core --example bench`: 11,136 beams, 17 substeps, roughly 6 to 10 ms per step natively on a noisy machine; see ER 001, phase 1.7. The core's own sine and cosine are in `core/src/maths.rs`.)
 
-### 2. 2D bridge builder
+### 2. 2D bridge builder ([Plan 002](docs/plans/002_bridge_builder.md))
 
-- [ ] The core runs in the browser as WebAssembly, stepped from TypeScript.
+- [ ] The core runs in the browser as WebAssembly, stepped from TypeScript. (Phase 2.1: runs in Node with native-identical hashes, `src/core.ts`; ticked when the editor page loads it.)
 - [ ] You can place nodes and beams, press run, and pause, single-step and slow down time.
 - [ ] A load rolls across the bridge and an under-built bridge breaks.
 - [ ] Beams are coloured by stress.
