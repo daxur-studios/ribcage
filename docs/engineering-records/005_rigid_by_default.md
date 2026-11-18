@@ -283,3 +283,38 @@ Built by Opus. `cargo test` (134 pass, 4 ignored), `pnpm test` (230 pass, 1 skip
 ### For 5.6
 
 5.6 (Sonnet) can start from the files alone. Add the wheel with `Commands.addJoint` (or `World::add_joint`) between the chassis body and the wheel body, then `setJointTarget(joint, JOINT_ROTOR, speed, 0, cap)`; `World.joints()` reads each joint's angle, torque and per-step peak. `core/tests/joint.rs` has the `wheel` and `brake` helpers to copy.
+
+## 2026-11-18 (phase 5.6: a wheel on a rotor)
+
+Built by Sonnet. `cargo test` 134 passed, 4 ignored; `pnpm test` 234 passed, 1 skipped (235); `pnpm typecheck` clean. The four goldens replay and both hops end at their hashes (0xd92f2aad01c0e048 all-live, 0x5a1c383b76d89ea6 rigid, step 1320); no core change.
+
+### As built
+
+- **[decision]** `src/parts/wheel.ts`: a wheel is a ring of 4 to 24 rim nodes in the xy plane, two hub nodes on the axle, beams along the rim, rim to both hubs and hub to hub, one never-live segment. A wheel is rigid when compiled with `rigid: true` (the default), so no rim beam is solved.
+- **[decision]** The rim is turned half a node step (`halfTurn`, default on, by half-angle sqrt formulas, since the angle table has no 7.5°). Nodes are spheres against the ground, so a 24-gon with a vertex down balances on one node, an unstable rest that crept with growing speed; turned half a step it rests on two nodes, which is stable. This is what makes the no-creep test pass.
+- **[decision]** `src/parts/rover.ts`: the chassis is a generated lattice (8 box corners, 4 axle stubs, each stub braced to its corner, the top node above and the other bottom corner on its side). Wheels are joined by a hinge (chassis corner, stub, top node as reference; wheel hubs, rim node 0 as reference), not by the ring assembler, since a hinge is not a weld.
+- **[decision]** Each wheel is its own never-live segment, a child of the chassis with no seam area. `driveRover` gives the +z side's rotors the negative speed, because their hinge axis points the other way; positive speed rolls toward +x.
+- **[decision]** Rolling radius is the rim radius, not rim plus node radius: a rim of spheres travels its perimeter per turn, and measured speed does not change with the node radius.
+
+### Measured
+
+- **[finding]** Rest (340 kg chassis, four 30 kg wheels, radius 0.4, 24 rim nodes): creep from 2 s to 3 s is 7.4e-7 m (bound 1e-3 m), 4 bodies.
+- **[finding]** Rolling, mean speed over the last two driven seconds against rotor speed × radius (cap 150 N·m per wheel): 1 rad/s 0.3976 against 0.4000 (slip 0.6%); 2 rad/s 0.7952 against 0.8000 (0.6%); 4 rad/s 1.418 against 1.600 (11.4%); 8 rad/s 3.061 against 3.200 (4.3%). Stated bounds: 5% at 2 rad/s, 20% elsewhere.
+- **[finding]** Stopping: after the rotors are set to 0 the rover moves at most 2.2e-2 m in the last second (bound 5e-2), 1.2e-3 m at 4 rad/s.
+- **[finding]** The drive's peak torque is 1.000000 of the cap in every run, never above.
+- **[finding]** Worst rim beam strain ratio 5.4e-13, so the rim beams are not solved.
+- **[finding]** Same script twice gives the same hash.
+- **[finding]** Cost: 0.33 ms per step with the rover (16 substeps, 4 bodies), measured in Node on this machine; there is no other scenario to compare against here.
+- **[finding]** Slip is not monotone in rotor speed (11% at 4, 4% at 8, under 1% at 1 and 2). With the torque pinned at the cap (150 N·m) the rover at 4 rad/s was accelerating, not at steady speed, in the early measurements; the loss is contact slip and polygon rolling resistance, not the rotor (the wheel's relative rotation reaches the target within 2%). I did not rework the solver.
+
+### Not checked
+
+- **[assumption]** Not run on the page; no visual demo (the plan says skip; a rover clip may join 5.12).
+- **[assumption]** Steering, suspension and the rough ground are not tested; the rover runs on the flat part of the field only.
+- **[assumption]** Only 24-node wheels are tested; the lower counts are built but untested and will be bumpier.
+- **[oracle-candidate]** Why does a rolling polygon wheel on a torque-pinned rotor slip 11% at 4 rad/s but 0.6% at 1 to 2? Is it the one friction coefficient with a positional cancel, or the joint passes?
+
+### For 5.7/5.8
+
+- 5.7 (Opus, the stress estimate, read-only) can start now; the rover is a craft with joints to run it on.
+- 5.8 should expect a hinge to mark both of its sides' segments as triggered, so a driven wheel is never put to sleep as barely loaded while its rotor moves.

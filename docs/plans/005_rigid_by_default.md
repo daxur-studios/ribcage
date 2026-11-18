@@ -69,7 +69,7 @@ Roadmap checks: "rigid bodies with anchors carry engines, pods and wheels" in 5.
   **Test:** a door on a hinge swings about its axis only (off-axis drift under a stated bound); a limit holds at its angle under a load and releases when the load reverses; a servo reaches its target at its rate and holds; a servo stalled against a load above its cap for ten simulated minutes gains no energy; a rotor holds speed under a load below its cap and slows above it; joint drive force never exceeds the cap in any substep; the three goldens replay.
   Demo: skip.
 
-- [ ] **5.6 A wheel on a rotor.** Build with: Sonnet (a generator and a test on 5.5's joints).
+- [x] **5.6 A wheel on a rotor.** Build with: Sonnet (a generator and a test on 5.5's joints).
   `src/parts/wheel.ts`: a rigid wheel (rim ring and hub, never-live) with a hinge to an axle on a mount, and a rotor; a small test rover (a truss with four wheels) assembled from parts. Ticks the roadmap check "rigid bodies with anchors carry engines, pods and wheels" (with 5.4).
   **Test:** the rover rests on the landing field's pad without creeping; with the rotors driven it rolls forward at roughly rotor speed times radius (within a stated slip) and stops when they stop; the wheels' rim nodes ride (no rim beam is solved); same script twice gives the same hash; the three goldens replay.
   Demo: skip (a short rover clip may join 5.12's slice demo).
