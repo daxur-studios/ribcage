@@ -74,10 +74,11 @@ Roadmap checks: "rigid bodies with anchors carry engines, pods and wheels" in 5.
   **Test:** the rover rests on the landing field's pad without creeping; with the rotors driven it rolls forward at roughly rotor speed times radius (within a stated slip) and stops when they stop; the wheels' rim nodes ride (no rim beam is solved); same script twice gives the same hash; the three goldens replay.
   Demo: skip (a short rover clip may join 5.12's slice demo).
 
-- [ ] **5.7 The stress estimate, read-only.** Build with: **Opus** (the free-body cut decides every wake; it must be validated before it drives anything).
+- [x] **5.7 The stress estimate, read-only.** Build with: **Opus** (the free-body cut decides every wake; it must be validated before it drives anything).
   `core/src/estimate.rs`: once per step per vessel, net force and moment per segment from the one force door, gravity, contacts and beams to live nodes, minus mass times acceleration (with spin terms); accumulated along the assembly tree from leaves to root; strain at each seam from its axial area and bending section; a segment's estimate is the larger of its seams'. Computed with sleeping off, exposed for tests and the page, decides nothing yet.
   **Test:** on the all-live hopper (standing, full throttle, the 3 m/s and 7 m/s drops) the estimate at each seam is compared to the strain measured from that seam's beams' `last_lambda`: within a stated band in steady states, never below the measured strain by more than a stated margin at any step (it may read high, never dangerously low; brief trap 4); closed loops read high (a test with a strut); the estimate costs under a stated share of the step; the three goldens replay.
-  Demo: skip.
+  As built (ER 005, phase 5.7): within 10% at the median in steady states; at single-step peaks it reads low by up to 20% on rigid parts and 53% on all-live ones, and it cannot see locked-in stress after yield, so "never dangerously low" is not met by the cut alone. 5.8 must wake on its triggers, not on the estimate alone.
+  Demo: skip (a clip of the rover cut is made for the record, not committed).
 
 - [ ] **5.8 Sleep and wake.** Build with: **Opus** (switching without adding energy, merging, the thresholds and triggers).
   The sleep rule, the wake rule and the triggers from "Settled" (contact arrival or force over the wake level, thrust change, joint motion, a neighbour over the wake level), minimum live time, wake damping, bodies recomputed by the union-find over segments when anything switched (so touching rigid segments merge into one body), wake and sleep events. `CMD_SET_SLEEPING`.

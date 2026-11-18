@@ -148,6 +148,9 @@ pub struct World {
     /// Per segment: a moving joint touched it in the last step (phase 5.8 reads it). Sized and
     /// cleared at the start of every step once a joint exists; empty before.
     pub seg_triggered: Vec<bool>,
+    /// The stress estimate's switch, inputs and outputs (phase 5.7). Not hashed, not recorded,
+    /// never read by the solve.
+    pub est: crate::estimate::Estimate,
 }
 
 impl Default for World {
@@ -221,6 +224,7 @@ impl Default for World {
             joint_torque: Vec::new(),
             joint_peak: Vec::new(),
             seg_triggered: Vec::new(),
+            est: crate::estimate::Estimate::default(),
         }
     }
 }

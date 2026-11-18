@@ -6,7 +6,7 @@
  * in the page.
  */
 
-import type { ApplyResult, BeamView, BodyView, CoreEvent, HostPtr, JointView, SegmentProps, SegmentView } from './core.ts';
+import type { ApplyResult, BeamView, BodyView, CoreEvent, EstimateView, HostPtr, JointView, SegmentProps, SegmentView } from './core.ts';
 import { Core } from './core.ts';
 import type { CommandBatch } from './commands.ts';
 
@@ -68,6 +68,16 @@ export class World {
   /** Joint angles and drive torques after the last step (plan 005, phase 5.5). */
   joints(): JointView {
     return this.#core.joints(this.#h);
+  }
+
+  /** Switches the stress estimate on or off (read-only; changes no hash, not recorded). */
+  setEstimate(on: boolean): void {
+    this.#core.setEstimate(this.#h, on);
+  }
+
+  /** The stress estimate after the last step (empty when off). */
+  estimate(): EstimateView {
+    return this.#core.estimate(this.#h);
   }
 
   /** One segment's mass, centre and inertia from the current positions, or `null`. */

@@ -32,9 +32,10 @@ use crate::world::{BeamSpec, World};
 /// in the state hash (only once a segment exists). 6 added the rigid-body commands (kinds 13 and
 /// 14) and the body readers, and puts bodies in both hashes (only while a body is alive). 7 added
 /// the joint commands (kinds 15 and 16) and the joint readers, and puts joints in both hashes (only
-/// once a joint exists). Nothing else changed, so a recording made at ABI 2, 3, 4, 5 or 6 still
-/// means the same thing and replays (`src/recording.ts`).
-pub const ABI_VERSION: u32 = 7;
+/// once a joint exists). 8 added the stress estimate's switch and readers (`rc_set_estimate`,
+/// `rc_est_*`), which touch neither hash nor any command. Nothing else changed, so a recording
+/// made at ABI 2 to 7 still means the same thing and replays (`src/recording.ts`).
+pub const ABI_VERSION: u32 = 8;
 
 /// Bytes per command record, for the host to check against its own layout.
 #[no_mangle]
@@ -607,4 +608,82 @@ pub unsafe extern "C" fn rc_segment_props(h: *mut Host, segment: u32) -> *const 
             host.segment_props.as_ptr()
         }
     }
+}
+
+/// Switches the stress estimate on (`on != 0`) or off (phase 5.7). Read-only: it changes no
+/// hash and is not a command, so recordings do not hold it. Its outputs fill from the next step.
+///
+/// # Safety
+/// `h` is a live host pointer.
+#[no_mangle]
+pub unsafe extern "C" fn rc_set_estimate(h: *mut Host, on: u32) {
+    let est = &mut (*h).world.est;
+    est.on = on != 0;
+    if !est.on {
+        *est = crate::estimate::Estimate::default();
+    }
+}
+
+/// Seams the estimate covered in the last step (0 when off or before a step with it on); the
+/// length of every `rc_est_seam_*` array. The segment array has `rc_segment_count` entries then.
+///
+/// # Safety
+/// `h` is a live host pointer.
+#[no_mangle]
+pub unsafe extern "C" fn rc_est_seam_count(h: *const Host) -> u32 {
+    (*h).world.est.seam_ratio.len() as u32
+}
+
+/// Per seam: force from the parent side on the child's subtree over the last step, three `Real`.
+///
+/// # Safety
+/// `h` is a live host pointer.
+#[no_mangle]
+pub unsafe extern "C" fn rc_est_seam_force_ptr(h: *const Host) -> *const Vec3 {
+    (*h).world.est.seam_force.as_ptr()
+}
+
+/// Per seam: the matching moment about the seam's centre, three `Real`.
+///
+/// # Safety
+/// `h` is a live host pointer.
+#[no_mangle]
+pub unsafe extern "C" fn rc_est_seam_moment_ptr(h: *const Host) -> *const Vec3 {
+    (*h).world.est.seam_moment.as_ptr()
+}
+
+/// Per seam: the point the moment is taken about, three `Real`.
+///
+/// # Safety
+/// `h` is a live host pointer.
+#[no_mangle]
+pub unsafe extern "C" fn rc_est_seam_centre_ptr(h: *const Host) -> *const Vec3 {
+    (*h).world.est.seam_centre.as_ptr()
+}
+
+/// Per seam: the estimated worst load ratio of its beams, one `Real`.
+///
+/// # Safety
+/// `h` is a live host pointer.
+#[no_mangle]
+pub unsafe extern "C" fn rc_est_seam_ratio_ptr(h: *const Host) -> *const Real {
+    (*h).world.est.seam_ratio.as_ptr()
+}
+
+/// Per seam: the measured worst load ratio of the same beams (NaN when none is solved), one `Real`.
+///
+/// # Safety
+/// `h` is a live host pointer.
+#[no_mangle]
+pub unsafe extern "C" fn rc_est_seam_measured_ptr(h: *const Host) -> *const Real {
+    (*h).world.est.seam_measured.as_ptr()
+}
+
+/// Per segment: the worst estimated ratio over the seams it touches, one `Real`.
+///
+/// # Safety
+/// `h` is a live host pointer.
+#[no_mangle]
+pub unsafe extern "C" fn rc_est_segment_ratio_ptr(h: *const Host) -> *const Real {
+    (*h).world.est.seg_ratio.as_ptr()
 }

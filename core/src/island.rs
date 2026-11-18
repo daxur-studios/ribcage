@@ -85,6 +85,10 @@ pub struct Island {
     pub joint_torque: Vec<Real>,
     pub joint_peak: Vec<Real>,
     pub joint_moved: Vec<bool>,
+    /// Per packed node, the step's summed contact impulse (normal and friction, without the part
+    /// that only drained old overlap), in N·s. Sized by the caller to ask for it (the stress
+    /// estimate, phase 5.7); left empty, the solver records nothing. Never read by the solve.
+    pub contact_impulse: Vec<Vec3>,
 }
 
 impl Island {

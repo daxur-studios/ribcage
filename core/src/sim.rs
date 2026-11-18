@@ -57,8 +57,10 @@ fn step_inner(world: &mut World, choice: Choice) -> StepStats {
     world.events.clear();
     world.clamped_nodes = 0;
     let done = world.step_count + 1;
+    crate::estimate::begin_step(world);
     // Thrust goes in as ordinary external force, from the positions the step starts with.
     apply_thrust(world);
+    crate::estimate::take_forces(world);
     if world.joint_count() > 0 {
         world.joints_begin_step();
     }
@@ -77,6 +79,10 @@ fn step_inner(world: &mut World, choice: Choice) -> StepStats {
         }
         if let Some(terrain) = &world.terrain {
             find_contacts(isl, terrain);
+        }
+        if world.est.on {
+            // Asks the solver to read off each node's contact impulse (output only).
+            isl.contact_impulse = vec![Vec3::ZERO; isl.node_world.len()];
         }
         let n = match choice {
             Choice::Rule(rule) => substep_count_with(isl, rule),
@@ -102,7 +108,12 @@ fn step_inner(world: &mut World, choice: Choice) -> StepStats {
     }
     for isl in islands.iter().filter(|isl| !isl.skipped) {
         copy_back(world, isl);
+        for (p, &j) in isl.contact_impulse.iter().enumerate() {
+            let i = isl.node_world[p] as usize;
+            world.est.contact[i] = world.est.contact[i] + j;
+        }
     }
+    crate::estimate::finish_step(world);
     for f in world.force.iter_mut() {
         *f = Vec3::ZERO;
     }

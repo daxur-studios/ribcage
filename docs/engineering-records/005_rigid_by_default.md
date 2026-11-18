@@ -318,3 +318,42 @@ Built by Sonnet. `cargo test` 134 passed, 4 ignored; `pnpm test` 234 passed, 1 s
 
 - 5.7 (Opus, the stress estimate, read-only) can start now; the rover is a craft with joints to run it on.
 - 5.8 should expect a hinge to mark both of its sides' segments as triggered, so a driven wheel is never put to sleep as barely loaded while its rotor moves.
+
+## 2026-11-18 (phase 5.7: the stress estimate, read-only)
+
+Built by Opus. `cargo test` 138 passed, 5 ignored; `pnpm test` 238 passed, 1 skipped (239); `pnpm typecheck` clean. The four goldens replay and both hops end at their hashes with the estimate on (0xd92f2aad01c0e048 all-live, 0x5a1c383b76d89ea6 rigid, step 1320). One full `pnpm test` run of six had one failure I could not reproduce in five reruns; most likely the new timing check under parallel load, since made best-of-three.
+
+### As built
+
+- **[decision]** `core/src/estimate.rs`, off by default. When on, each step it records the velocities before the step, the forces from the one force door (with thrust), and the contact impulses the solver applied, then cuts the assembly tree at every seam: per node `m (v - v_prev) / dt - (m g + force + contact / dt)`, summed per segment, accumulated from leaves to root (a parent's index is always below its child's), moment taken about the seam centre (the mean of the seam beams' midpoints, or the child's centre when there are none). Beams from a segment node to a node with no segment, or a pinned one, are loads from outside.
+- **[decision]** The core has no Young's modulus or section per seam (only compliance and yield per beam), so "strain from axial area and bending section" is done as a stiffness spread: the child moves rigidly by (d, θ) against the parent, each seam beam stretches by `g_i · x` with `g_i = [u; (r × u) / L]`, the 6×6 system `Σ k_i g_i g_iᵀ x = -[F; M / L]` is solved (Gaussian elimination with partial pivoting, a 1e-9 trace regulariser), and `T_i = k_i g_i · x`, `k_i = 1 / compliance`. A beam the spread puts past its yield force is held at it and the rest spread again (at most 8 rounds), as the solver's beams yield. The seam's ratio is the worst `|T| / F_yield`; a segment's is the largest of its seams'.
+- **[decision]** Read-only by construction: the solver change is output only (the ground push and friction also return what they applied, the old functions are wrappers, bit-identical), and the contact record is sized only when the estimate is on. Turned on by `rc_set_estimate`, not a command, so recordings and hashes are untouched; ABI 7 → 8 adds only the readers (`rc_est_*`), and the decoder accepts 3 to 8.
+- **[decision]** Compared against the same seam beams' `last_lambda` (spring only, last substep, capped at yield); a beam with both ends on one body is not solved and is left out of the measurement. Comparisons count steps where the seam carries at least a tenth of its run's peak; below that both are noise around zero.
+- **[decision]** A beam that skips a seam (both ends not on the two sides of one seam) is ignored by the spread, so a closed loop reads high, never low (tested with a strut over three seams).
+- **[decision]** Per vessel is per world until 5.10 makes vessels.
+
+### Measured
+
+Ratio is estimate / measured. Bounds are in `test/estimate.test.ts` and `core/tests/estimate.rs`.
+
+- **[finding]** Cantilever truss, one segment per frame, static: the seam force equals the weight beyond it plus the tip load within 1%, and equals the beams' own resultant within 1%; the worst ratio per seam is within 12% (bound 15%), reading low.
+- **[finding]** Hopper standing (all-live): median 0.950, p5 0.837, p95 1.014; peak -17.6% to +0.7%. Bounds: median 0.9 to 1.05, peak -20% to +5%.
+- **[finding]** Hop, powered climb: all-live median 0.940 (p5 0.465), peak -53.4% to +4.6%; rigid median 0.941 (p5 0.818), peak -18.8% to +3.9%. Bounds: median 0.9 to 1.05, peak above -60% (all-live) or -25% (rigid), high side under +10%.
+- **[finding]** Drops (all-live): 3 m/s median 0.951, peak -37.0% to 0%; 7 m/s median 0.861, peak -37.4% to +0.1%. Bounds: median 0.8 to 1.05, peak -45% to +5%.
+- **[finding]** Hop touchdown: all-live peak high +44.1%, rigid +6.7% (before the yield cap all-live read +124%). Bounds +50% and +10%. Single steps differ more: the estimate is a step average with the dampers, the measurement the last substep's spring.
+- **[finding]** Rover with its chassis cut front and rear (16 beams across): with a 4 kN push up on one hub (a rock) median 0.724, peak -15.3%; driven at 2 rad/s median 0.678, peak 0.390 against 0.416 of yield (-6.1%); stopping median 0.976, peak +3.6%. Bounds: rock and driven peaks -20% to +5%, stopping median 0.9 to 1.1. The driven chassis seam peaks at 0.42 of yield, worth knowing for 5.8.
+- **[finding]** Cost on the all-live hop, best of three: about 1.8 ms/step off and 1.85 on, 0 to 5% (bound 25%).
+- **[finding]** The cut changes no motion: the rover cut in two ends on the stock rover's positions bit for bit. Its physics hash is not equal, because a body's slot is its lowest segment index and the cut moves the wheels from slots 1-4 to 2-5; the hash covers the slots.
+
+### Not checked
+
+- **[finding]** The free-body cut cannot see self-equilibrated stress. After a beam yields, the stress locked in by the plastic set crosses no cut: the hop's rest after touchdown reads a median of 0.31 (all-live) and 0.19 (rigid) of the measured value. Standing, the rover's indeterminate frame carries a self-balanced stress under its own weight (7.3e-4 of yield) that the estimate reads as 2.5e-5. Both are asserted as known limits.
+- **[finding]** The plan's "never below the measured strain by more than a stated margin at any step" is not met: single-step peaks read low by up to 20% (rigid) and 53% (all-live), and p5 of single steps under impact is 0.1 to 0.5. 5.8 should wake on its triggers (contact arrival, thrust change, joint motion) and use the estimate with a margin (a wake level at half the sleep level's distance to yield, say) for the steady case where it is within 10%. I did not rework the solver's damping split to close this.
+- **[assumption]** Not run on the page; spin terms (`I ω̇ + ω × I ω`) of rigid bodies enter only through their nodes' velocities, which is exact for riding nodes.
+- **[oracle-candidate]** How should a sleeping segment carry a locked-in plastic stress so a later wake test is not low by it: store the seam's residual λ at sleep and add it to the cut, or a different measure?
+
+### For 5.8
+
+- Read `world.est.seg_ratio` (per segment) after `step`; it is the larger of the segment's seams. Expect it 5 to 20% low at peaks and blind to locked-in stress.
+- The estimate needs the contact record on, which costs a little; switch it on with sleeping.
+

@@ -417,10 +417,31 @@ pub fn push_ground_contact(
     offset: Real,
     h: Real,
 ) -> (Real, Vec3) {
+    let (dl_n, p0, _) = push_ground_contact_rec(s, start, pred, m, end, radius, normal, offset, h);
+    (dl_n, p0)
+}
+
+/// [`push_ground_contact`], also returning the part of `Δλ_n` that only removed old overlap
+/// (the split recovery, which moves the start pose too and so changes no velocity). The contact's
+/// impulse on the end in this substep is `normal · (Δλ_n − recovered) / h`. Same arithmetic, same
+/// order: the third number is read off, never fed back (phase 5.7, the stress estimate).
+#[allow(clippy::too_many_arguments)]
+#[inline]
+pub fn push_ground_contact_rec(
+    s: &mut Pose,
+    start: &mut Pose,
+    pred: &mut Pose,
+    m: &Mass,
+    end: Endpoint,
+    radius: Real,
+    normal: Vec3,
+    offset: Real,
+    h: Real,
+) -> (Real, Vec3, Real) {
     let ground = Endpoint::Fixed;
     let w = ground.weight(m, s.rot, normal) + end.weight(m, s.rot, normal);
     if w == 0.0 {
-        return (0.0, Vec3::ZERO);
+        return (0.0, Vec3::ZERO, 0.0);
     }
     let p0 = end.place(m, start.pos, start.centre, start.rot);
     let d = radius - (normal.dot(end.place(m, s.pos, s.centre, s.rot)) - offset);
@@ -429,18 +450,20 @@ pub fn push_ground_contact(
     let allowed = if d0 > cap { d0 - cap } else { 0.0 };
     #[allow(clippy::neg_cmp_op_on_partial_ord)] // also true for NaN: a bad number is not pushed
     if !(d > allowed) {
-        return (0.0, p0);
+        return (0.0, p0, 0.0);
     }
     let push = d - allowed;
     let dl_n = push / w;
     apply_correction(s, m, ground, end, normal, dl_n);
     let old = d0 - allowed;
+    let mut rec = 0.0;
     if old > 0.0 {
         let recovered = if push < old { push } else { old };
-        end.shift(start, m, normal, recovered / w, true, true);
-        end.shift(pred, m, normal, recovered / w, true, false);
+        rec = recovered / w;
+        end.shift(start, m, normal, rec, true, true);
+        end.shift(pred, m, normal, rec, true, false);
     }
-    (dl_n, p0)
+    (dl_n, p0, rec)
 }
 
 /// The friction of [`solve_ground_contact`], after its push `dl_n` (none without a push). The
@@ -459,8 +482,26 @@ pub fn ground_friction(
     p0: Vec3,
     mu: Real,
 ) {
+    ground_friction_rec(s, start, m, end, normal, dl_n, p0, mu);
+}
+
+/// [`ground_friction`], also returning the friction's `Δλ` times its direction: the end moves by
+/// its weight times this, so the friction impulse on the end in this substep is this over `h`.
+/// Zero when there was no push or no slip. Read off only (phase 5.7).
+#[allow(clippy::too_many_arguments)]
+#[inline]
+pub fn ground_friction_rec(
+    s: &mut Pose,
+    start: &Pose,
+    m: &Mass,
+    end: Endpoint,
+    normal: Vec3,
+    dl_n: Real,
+    p0: Vec3,
+    mu: Real,
+) -> Vec3 {
     if dl_n == 0.0 {
-        return;
+        return Vec3::ZERO;
     }
     let ground = Endpoint::Fixed;
     let p0 = if end.touches_body(m) {
@@ -478,7 +519,9 @@ pub fn ground_friction(
         let limit = mu * dl_n;
         let dl_t = if full <= limit { full } else { limit };
         apply_correction(s, m, ground, end, along, -dl_t);
+        return along * -dl_t;
     }
+    Vec3::ZERO
 }
 
 /// The one distance constraint (layout rule 6). A beam endpoint is a loose node or a point
@@ -652,6 +695,10 @@ pub fn solve_island(isl: &mut Island, n: u32, max_speed: Real) -> SolveOutput {
     let start_lambda = isl.last_lambda.clone();
     let mut was_clamped = vec![false; nodes];
     let mut pushes = vec![(0.0 as Real, Vec3::ZERO); isl.contact_node.len()];
+    // The stress estimate (phase 5.7) asks for each node's contact impulse over the step by
+    // sizing `contact_impulse`; empty, nothing is recorded. Read off only, never fed back.
+    let record = !isl.contact_impulse.is_empty();
+    let mut recovered = vec![0.0 as Real; if record { isl.contact_node.len() } else { 0 }];
     let mut clamped = 0u32;
     // Joints (phase 5.5): their kernel ends, the angle at the step's start, and each substep's
     // start angle for the drives.
@@ -755,7 +802,7 @@ pub fn solve_island(isl: &mut Island, n: u32, max_speed: Real) -> SolveOutput {
             // tilting the body under another corner's friction.
             for c in 0..isl.contact_node.len() {
                 let i = isl.contact_node[c];
-                pushes[c] = push_ground_contact(
+                let (dl_n, p0, rec) = push_ground_contact_rec(
                     &mut s,
                     &mut start,
                     &mut pred,
@@ -766,10 +813,14 @@ pub fn solve_island(isl: &mut Island, n: u32, max_speed: Real) -> SolveOutput {
                     isl.contact_offset[c],
                     h,
                 );
+                pushes[c] = (dl_n, p0);
+                if record {
+                    recovered[c] = rec;
+                }
             }
             for c in 0..isl.contact_node.len() {
                 let (dl_n, p0) = pushes[c];
-                ground_friction(
+                let fr = ground_friction_rec(
                     &mut s,
                     &start,
                     &m,
@@ -779,23 +830,37 @@ pub fn solve_island(isl: &mut Island, n: u32, max_speed: Real) -> SolveOutput {
                     p0,
                     isl.friction,
                 );
+                if record {
+                    let i = isl.contact_node[c] as usize;
+                    let j = (isl.contact_normal[c] * (dl_n - recovered[c]) + fr) / h;
+                    isl.contact_impulse[i] = isl.contact_impulse[i] + j;
+                }
             }
             for c in 0..isl.beam_contact.len() {
                 let k = isl.beam_contact[c] as usize;
                 let (a, b) = (isl.beam_a[k], isl.beam_b[k]);
                 let (ra, rb) = (isl.radius[a as usize], isl.radius[b as usize]);
-                solve_ground_contact(
+                // `solve_ground_contact` spelled out, so the impulse can be read off.
+                let end = Endpoint::Point(a, b, 0.5);
+                let normal = isl.beam_contact_normal[c];
+                let (dl_n, p0, rec) = push_ground_contact_rec(
                     &mut s,
                     &mut start,
                     &mut pred,
                     &m,
-                    Endpoint::Point(a, b, 0.5),
+                    end,
                     if ra < rb { ra } else { rb },
-                    isl.beam_contact_normal[c],
+                    normal,
                     isl.beam_contact_offset[c],
-                    isl.friction,
                     h,
                 );
+                let fr = ground_friction_rec(&mut s, &start, &m, end, normal, dl_n, p0, isl.friction);
+                if record {
+                    let j = (normal * (dl_n - rec) + fr) / h;
+                    let (a, b) = (a as usize, b as usize);
+                    isl.contact_impulse[a] = isl.contact_impulse[a] + j * 0.5;
+                    isl.contact_impulse[b] = isl.contact_impulse[b] + j * 0.5;
+                }
             }
         }
         for i in 0..nodes {

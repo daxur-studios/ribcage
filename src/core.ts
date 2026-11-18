@@ -10,7 +10,7 @@
 import { COMMAND_BYTES, type CommandBatch } from './commands.ts';
 
 /** The ABI version this loader was written for (`ABI_VERSION` in core/src/ffi.rs). */
-export const ABI_VERSION = 7;
+export const ABI_VERSION = 8;
 
 /** A host pointer inside the core (an integer to JavaScript). */
 export type HostPtr = number;
@@ -77,6 +77,14 @@ interface Exports {
   rc_joint_angle_ptr(h: number): number;
   rc_joint_torque_ptr(h: number): number;
   rc_joint_peak_ptr(h: number): number;
+  rc_set_estimate(h: number, on: number): void;
+  rc_est_seam_count(h: number): number;
+  rc_est_seam_force_ptr(h: number): number;
+  rc_est_seam_moment_ptr(h: number): number;
+  rc_est_seam_centre_ptr(h: number): number;
+  rc_est_seam_ratio_ptr(h: number): number;
+  rc_est_seam_measured_ptr(h: number): number;
+  rc_est_segment_ratio_ptr(h: number): number;
 }
 
 /** Segments, seams and each node's segment, as copies (plan 005, phase 5.1). */
@@ -121,6 +129,25 @@ export interface JointView {
   torque: Float64Array;
   /** Largest drive torque magnitude over the step's substeps; never above the cap. */
   peak: Float64Array;
+}
+
+/**
+ * The stress estimate after the last step (plan 005, phase 5.7), as copies. Empty arrays when
+ * the estimate is off or no step has run with it on. Read-only: it changes no hash.
+ */
+export interface EstimateView {
+  /** Per seam: force from the parent side on the child's subtree, newtons, x y z. */
+  force: Float64Array;
+  /** Per seam: the moment about `centre`, newton-metres, x y z. */
+  moment: Float64Array;
+  /** Per seam: where the moment is taken (mean of its beams' midpoints), x y z. */
+  centre: Float64Array;
+  /** Per seam: estimated worst |force| / yield force of its beams (0 with no beams). */
+  ratio: Float64Array;
+  /** Per seam: the solver's own worst |force| / yield force of the same beams (NaN if none solved). */
+  measured: Float64Array;
+  /** Per segment: worst estimated ratio over the seams it touches. */
+  segment: Float64Array;
 }
 
 /** A segment's mass, centre and inertia from the current positions (`segment::SegmentProps`). */
@@ -370,6 +397,27 @@ export class Core {
       angle: new Float64Array(mem, x.rc_joint_angle_ptr(h), n).slice(),
       torque: new Float64Array(mem, x.rc_joint_torque_ptr(h), n).slice(),
       peak: new Float64Array(mem, x.rc_joint_peak_ptr(h), n).slice(),
+    };
+  }
+
+  /** Switches the stress estimate on or off. Not a command: recordings do not hold it. */
+  setEstimate(h: HostPtr, on: boolean): void {
+    this.#x.rc_set_estimate(h, on ? 1 : 0);
+  }
+
+  /** The stress estimate after the last step, as copies. */
+  estimate(h: HostPtr): EstimateView {
+    const x = this.#x;
+    const n = x.rc_est_seam_count(h);
+    const segs = n === 0 ? 0 : x.rc_segment_count(h);
+    const mem = x.memory.buffer;
+    return {
+      force: new Float64Array(mem, x.rc_est_seam_force_ptr(h), n * 3).slice(),
+      moment: new Float64Array(mem, x.rc_est_seam_moment_ptr(h), n * 3).slice(),
+      centre: new Float64Array(mem, x.rc_est_seam_centre_ptr(h), n * 3).slice(),
+      ratio: new Float64Array(mem, x.rc_est_seam_ratio_ptr(h), n).slice(),
+      measured: new Float64Array(mem, x.rc_est_seam_measured_ptr(h), n).slice(),
+      segment: new Float64Array(mem, x.rc_est_segment_ratio_ptr(h), segs).slice(),
     };
   }
 
