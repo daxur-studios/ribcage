@@ -32,19 +32,19 @@ function dist(a: readonly number[], b: readonly number[]): number {
 function hopperLeg(): Part {
   const [a, b, c] = TANK.patches.find((p) => p.id === "side-0-0")!.nodes.map((i) => TANK.nodes[i]!) as [Part["nodes"][number], Part["nodes"][number], Part["nodes"][number]];
   return leg({
-    length: 2.4,
-    footOffset: 1.2,
+    length: 3,
+    footOffset: 1.5,
     footSize: 0.35,
     mountWidth: dist([a.x, a.y, a.z], [b.x, b.y, b.z]),
     mountHeight: dist([a.x, a.y, a.z], [c.x, c.y, c.z]),
-    bodyWidth: 0.7,
+    bodyWidth: 0.9,
     material: "aluminium",
     memberArea: 2e-4,
     mass: 150,
-    sprungStiffness: 5e5,
-    sprungStroke: 0.12,
-    crushForce: 45e3,
-    crushStroke: 0.3,
+    sprungStiffness: 3e5,
+    sprungStroke: 0.3,
+    crushForce: 75e3,
+    crushStroke: 0.15,
   });
 }
 
@@ -361,7 +361,7 @@ test("a refused assembly says why and changes nothing", () => {
   const solo: Assembly = { parts: [{ id: "tank", part: TANK }, { id: "l1", part: l }], root: "tank", joins: [crowded.joins[0]!] };
   expectRefused({ ...solo, joins: [{ child: "l1", childPort: "mount", parent: "tank", parentPort: "top", clock: 0 }] }, "port-kind", /ring cannot be joined to a mount patch/);
   expectRefused({ ...solo, joins: [{ ...solo.joins[0]!, clock: 1 }] }, "patch-clock", /no clock/);
-  const small = leg({ length: 2.4, footOffset: 1.2, footSize: 0.35, mountWidth: 0.35, mountHeight: 0.35, bodyWidth: 0.7, material: "aluminium", memberArea: 2e-4, mass: 150, sprungStiffness: 5e5, sprungStroke: 0.12, crushForce: 45e3, crushStroke: 0.3 });
+  const small = leg({ length: 3, footOffset: 1.5, footSize: 0.35, mountWidth: 0.35, mountHeight: 0.35, bodyWidth: 0.9, material: "aluminium", memberArea: 3e-4, mass: 150, sprungStiffness: 3e5, sprungStroke: 0.3, crushForce: 75e3, crushStroke: 0.15 });
   expectRefused({ ...solo, parts: [{ id: "tank", part: TANK }, { id: "l1", part: small }] }, "patch-shape", /l1 node \d lands .* m from the tank node it joins/);
   // A ring that is not where its axis says: a pod whose ring is moved away.
   const bent: Part = { ...POD, nodes: POD.nodes.map((n, i) => (i === 3 ? { ...n, x: n.x + 0.01 } : n)) };

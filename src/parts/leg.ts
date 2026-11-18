@@ -1,8 +1,8 @@
 /**
  * Purpose: the landing leg generator: a four-cornered lattice from a mount patch on a tank wall out
  * to a foot, in four stages from the mount to the foot: the upper leg (an ordinary stiff lattice), a
- * crush bay (every member yields together at one force and breaks together at one stroke, so the
- * leg gives way at a steady force), a sprung bay (every member soft, so the foot moves in a spring
+ * crush bay (five strokes long; every member yields together at one force and breaks together at
+ * one stroke, so the leg gives way at a steady force), a sprung bay (every member soft, so the foot moves in a spring
  * with no bounce) and a short stiff foot adapter. The crush and sprung bays are straight square
  * prisms along the axis, so a push along the axis loads them evenly and does not shear them. The
  * mount patch and the foot are not square to the axis; the upper leg and the foot adapter are the
@@ -55,6 +55,8 @@ export interface LegParams {
 
 /** Bay length as a multiple of its stroke: long enough that the bay's strain stays moderate. */
 const BAY_PER_STROKE = 2.5;
+/** The crush bay is this many strokes long: its members break at a strain of 1 over this, in tension and in compression alike. */
+const CRUSH_PER_STROKE = 5;
 /** The foot adapter is this share of the leg's length. */
 const FOOT_SHARE = 0.15;
 /** The upper leg is at least this share of the leg's length. */
@@ -102,7 +104,7 @@ export function leg(p: LegParams): Part {
 
   const drop = Math.sqrt(p.length * p.length - p.footOffset * p.footOffset);
   const sprungLength = BAY_PER_STROKE * p.sprungStroke;
-  const crushLength = BAY_PER_STROKE * p.crushStroke;
+  const crushLength = CRUSH_PER_STROKE * p.crushStroke;
   const footLength = FOOT_SHARE * p.length;
   const upperLength = p.length - sprungLength - crushLength - footLength;
   if (upperLength < UPPER_SHARE_MIN * p.length) {

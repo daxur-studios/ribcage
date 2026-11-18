@@ -107,15 +107,16 @@ async function fly(script: ThrottleScript, steps: number): Promise<Run> {
 
 const FULL_FROM_60: ThrottleScript = [{ step: 60, throttle: 1 }];
 
-test("the landing field has a dead-flat pad, low hills beyond it, and is the same every time", () => {
+test("the landing field has a dead-flat pad, a rough area beside it, and is the same every time", () => {
   const f = landingField();
-  assert.equal(f.nx, 61);
-  for (let x = -LANDING_PAD_HALF; x <= LANDING_PAD_HALF; x += 1) {
-    for (let z = -LANDING_PAD_HALF; z <= LANDING_PAD_HALF; z += 1) assert.equal(heightAt(f, x, z), 0, `pad at ${x}, ${z}`);
+  assert.equal(f.nx, 65);
+  assert.equal(f.cell, 0.5);
+  for (let x = -LANDING_PAD_HALF; x <= LANDING_PAD_HALF; x += 0.5) {
+    for (let z = -LANDING_PAD_HALF; z <= LANDING_PAD_HALF; z += 0.5) assert.equal(heightAt(f, x, z), 0, `pad at ${x}, ${z}`);
   }
   let max = 0;
   for (const h of f.heights) max = Math.max(max, h);
-  assert.ok(max > 0.5 && max <= 1.3, `the hills reach ${max} m`);
+  assert.ok(max > 0.1 && max <= 0.5, `the bumps reach ${max} m`);
   assert.deepEqual([...landingField().heights], [...f.heights]);
 });
 

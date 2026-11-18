@@ -427,23 +427,23 @@ const PODS: PodParams[] = [
   { ringNodes: 6, bottomRadius: 0.7, topRadius: 0.4, height: 1, apexRise: 0.5, material: "carbon", memberArea: 2e-4, mass: 600 },
   { ringNodes: 16, bottomRadius: 1.4, topRadius: 0.8, height: 1.5, material: "aluminium", memberArea: 3e-4, mass: 1800 },
 ];
-/** The hopper's leg: 45 kN crush force over 0.3 m, a spring that reaches it after 0.12 m (ER 004). */
+/** The hopper's leg: 75 kN crush force over 0.15 m, a spring that reaches it after 0.25 m (ER 004). */
 const LEG: LegParams = {
-  length: 2.4,
-  footOffset: 1.2,
+  length: 3,
+  footOffset: 1.5,
   footSize: 0.35,
   mountWidth: 0.35,
   mountHeight: 0.35,
-  bodyWidth: 0.7,
+  bodyWidth: 0.9,
   material: "aluminium",
-  memberArea: 2e-4,
+  memberArea: 3e-4,
   mass: 150,
-  sprungStiffness: 5e5,
-  sprungStroke: 0.12,
-  crushForce: 45e3,
-  crushStroke: 0.3,
+  sprungStiffness: 3e5,
+  sprungStroke: 0.3,
+  crushForce: 75e3,
+  crushStroke: 0.15,
 };
-const LEGS: LegParams[] = [LEG, { ...LEG, footOffset: 0.6, crushForce: 30e3, crushStroke: 0.2, mass: 120 }];
+const LEGS: LegParams[] = [LEG, { ...LEG, footOffset: 0.9, crushForce: 40e3, mass: 150 }];
 
 const PARTS: SweepCase[] = [
   ...ENGINES.map((p, i): SweepCase => ({ name: `engine ${i} (${p.ringNodes} nodes, ${p.material})`, build: () => engine(p), stated: p.mass, poses: ["standing"] })),
@@ -853,7 +853,8 @@ test("a leg pressed along its axis stays elastic below the crush force", async (
     const r = pressLeg(core, p, 0.9, 1600, 200);
     assert.deepEqual(r.events, [], "no yield and no break below the crush force");
     const last = r.crush[r.crush.length - 1]!;
-    assert.ok(last > 0 && last < 0.08 * p.crushStroke, `crush bay shortened ${last} m, an elastic amount`);
+    // The crush bay is five strokes long, so an elastic squeeze is a few per cent of that.
+    assert.ok(last > 0 && last < 0.03 * 5 * p.crushStroke, `crush bay shortened ${last} m, an elastic amount`);
   }
 });
 
@@ -1004,7 +1005,7 @@ test("the new generators refuse what cannot work, with the reason", () => {
   assert.throws(() => pod({ ...q, topRadius: -1 }), /top radius/);
   assert.throws(() => pod({ ...q, mass: 10 }), /below the members' own mass/);
   assert.throws(() => leg({ ...LEG, length: 0 }), /length/);
-  assert.throws(() => leg({ ...LEG, footOffset: 2.4 }), /foot offset/);
+  assert.throws(() => leg({ ...LEG, footOffset: 3.2 }), /foot offset/);
   assert.throws(() => leg({ ...LEG, footOffset: -1 }), /foot offset/);
   assert.throws(() => leg({ ...LEG, crushStroke: 1 }), /upper leg would be/);
   assert.throws(() => leg({ ...LEG, sprungStiffness: 1e4 }), /would yield/);

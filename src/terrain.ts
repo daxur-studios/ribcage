@@ -138,28 +138,39 @@ export function valleyTerrain(): Terrain {
 }
 
 /** Half the side, in metres, of the dead-flat landing pad at the middle of the landing field. */
-export const LANDING_PAD_HALF = 8;
+export const LANDING_PAD_HALF = 6;
+/** The rough area of the landing field: bumps are placed inside this box (x from, x to, z from, z to). */
+export const ROUGH_AREA = { x0: 7.5, x1: 14.5, z0: -8, z1: 8 } as const;
+/** How many bumps the rough area has. */
+const ROUGH_BUMPS = 48;
+/** Bump heights run from `ROUGH_HEIGHT_MIN` up by up to `ROUGH_HEIGHT_SPAN`, in metres. */
+const ROUGH_HEIGHT_MIN = 0.05;
+const ROUGH_HEIGHT_SPAN = 0.1;
 
 /**
- * The landing field for the craft tests: 61 by 61 points, 1 m apart, from -30 to 30 on both axes.
- * Dead flat at height zero within `LANDING_PAD_HALF` of the origin (a square pad), then a smooth
- * rise into a few low hills beyond it (up to 1.2 m), so a craft that drifts off the pad lands on
- * a slope.
+ * The landing field for the craft tests: 65 by 65 points, 0.5 m apart, from -16 to 16 on both
+ * axes. Dead flat at height zero within `LANDING_PAD_HALF` of the origin (a square pad). Beside it,
+ * inside `ROUGH_AREA`, `ROUGH_BUMPS` round bumps 0.05 to 0.15 m high and 1.6 to 3.2 m across (3 to 6 cells), put
+ * where a small integer generator says (they overlap, so the ground reaches 0.3 m), so the same field comes out every time and a foot
+ * touching down there meets a slope of any aspect.
  */
 export function landingField(): Terrain {
-  const hills: [number, number, number, number][] = [
-    [18, 6, 7, 1.2],
-    [-17, -12, 8, 1.0],
-    [5, -20, 7, 0.8],
-    [-15, 16, 6, 0.9],
-  ];
-  return fill(flatTerrain(61, 61, -30, -30, 1), (x, z) => {
-    const ax = x < 0 ? -x : x;
-    const az = z < 0 ? -z : z;
-    const out = (ax > az ? ax : az) - LANDING_PAD_HALF;
-    const ramp = smoothstep(out / 6);
+  const bumps: [number, number, number, number][] = [];
+  let seed = 20260;
+  const next = (): number => {
+    seed = (seed * 1664525 + 1013904223) % 4294967296;
+    return seed / 4294967296;
+  };
+  for (let k = 0; k < ROUGH_BUMPS; k++) {
+    const x = ROUGH_AREA.x0 + (ROUGH_AREA.x1 - ROUGH_AREA.x0) * next();
+    const z = ROUGH_AREA.z0 + (ROUGH_AREA.z1 - ROUGH_AREA.z0) * next();
+    const r = 0.8 + 0.8 * next();
+    const h = ROUGH_HEIGHT_MIN + ROUGH_HEIGHT_SPAN * next();
+    bumps.push([x, z, r, h]);
+  }
+  return fill(flatTerrain(65, 65, -16, -16, 0.5), (x, z) => {
     let h = 0;
-    for (const [cx, cz, r, hh] of hills) h += bump(x, z, cx, cz, r, hh);
-    return h * ramp;
+    for (const [cx, cz, r, hh] of bumps) h += bump(x, z, cx, cz, r, hh);
+    return h;
   });
 }

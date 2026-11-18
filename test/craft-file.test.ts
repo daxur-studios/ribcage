@@ -21,7 +21,7 @@ async function loadCore(): Promise<Core> {
 }
 
 const HOPPER_TEXT = readFileSync(FIXTURE, "utf8");
-const PLACE = { x: 0, y: 1.82, z: 0, yaw: 0 };
+const PLACE = { x: 0, y: 2.339576, z: 0, yaw: 0 };
 
 /** The hopper built straight from the generators, the way the assembler tests build it. */
 function hopperInCode(): Assembly {
@@ -29,19 +29,19 @@ function hopperInCode(): Assembly {
   const [a, b, c] = tk.patches.find((p) => p.id === "side-0-0")!.nodes.map((i) => tk.nodes[i]!) as [Part["nodes"][number], Part["nodes"][number], Part["nodes"][number]];
   const dist = (p: typeof a, q: typeof a): number => Math.sqrt((p.x - q.x) ** 2 + (p.y - q.y) ** 2 + (p.z - q.z) ** 2);
   const l = leg({
-    length: 2.4,
-    footOffset: 1.2,
+    length: 3,
+    footOffset: 1.5,
     footSize: 0.35,
     mountWidth: dist(a, b),
     mountHeight: dist(a, c),
-    bodyWidth: 0.7,
+    bodyWidth: 0.9,
     material: "aluminium",
     memberArea: 2e-4,
     mass: 150,
-    sprungStiffness: 5e5,
-    sprungStroke: 0.12,
-    crushForce: 45e3,
-    crushStroke: 0.3,
+    sprungStiffness: 3e5,
+    sprungStroke: 0.3,
+    crushForce: 75e3,
+    crushStroke: 0.15,
   });
   const en = engine({ ringNodes: 8, topRadius: 1, nozzleRadius: 0.5, height: 1, material: "steel", memberArea: 4e-4, mass: 800, maxThrust: 80e3 });
   const po = pod({ ringNodes: 8, bottomRadius: 1, topRadius: 0.6, height: 1.2, material: "aluminium", memberArea: 4e-4, mass: 1200 });
@@ -216,7 +216,7 @@ test("a bad number, material or name is refused, and so is a number that is not 
   refused(broken((o) => (o.joins[0].parent = 4)), "bad-value", /joins\[0\]\.parent/);
   // JSON has no NaN or Infinity, but a number too big for a double reads as Infinity.
   refused(HOPPER_TEXT.replace('"mass": 2000', '"mass": 1e999'), "bad-value", /parts\[0\]\.params\.mass must be a finite number, not Infinity/);
-  refused(HOPPER_TEXT.replace('"y": 1.82', '"y": -1e999'), "bad-value", /place\.y.*-Infinity/);
+  refused(HOPPER_TEXT.replace('"y": 2.339576', '"y": -1e999'), "bad-value", /place\.y.*-Infinity/);
   refused(broken((o) => (o.parts = o.parts.map((p: any) => (p.type === "tank" ? { ...p, params: { ...p.params, section: "square" } } : p)))), "unknown-field", /section/);
 });
 

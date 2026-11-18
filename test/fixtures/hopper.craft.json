@@ -4,7 +4,7 @@
   "root": "tank",
   "place": {
     "x": 0,
-    "y": 1.82,
+    "y": 2.339576,
     "z": 0,
     "yaw": 0
   },
@@ -53,76 +53,76 @@
       "id": "leg0",
       "type": "leg",
       "params": {
-        "length": 2.4,
-        "footOffset": 1.2,
+        "length": 3,
+        "footOffset": 1.5,
         "footSize": 0.35,
         "mountWidth": 0.7653668647301797,
         "mountHeight": 0.625,
         "material": "aluminium",
         "memberArea": 0.0002,
         "mass": 150,
-        "sprungStiffness": 500000,
-        "sprungStroke": 0.12,
-        "crushForce": 45000,
-        "crushStroke": 0.3,
-        "bodyWidth": 0.7
+        "sprungStiffness": 300000,
+        "sprungStroke": 0.3,
+        "crushForce": 75000,
+        "crushStroke": 0.15,
+        "bodyWidth": 0.9
       }
     },
     {
       "id": "leg1",
       "type": "leg",
       "params": {
-        "length": 2.4,
-        "footOffset": 1.2,
+        "length": 3,
+        "footOffset": 1.5,
         "footSize": 0.35,
         "mountWidth": 0.7653668647301797,
         "mountHeight": 0.625,
         "material": "aluminium",
         "memberArea": 0.0002,
         "mass": 150,
-        "sprungStiffness": 500000,
-        "sprungStroke": 0.12,
-        "crushForce": 45000,
-        "crushStroke": 0.3,
-        "bodyWidth": 0.7
+        "sprungStiffness": 300000,
+        "sprungStroke": 0.3,
+        "crushForce": 75000,
+        "crushStroke": 0.15,
+        "bodyWidth": 0.9
       }
     },
     {
       "id": "leg2",
       "type": "leg",
       "params": {
-        "length": 2.4,
-        "footOffset": 1.2,
+        "length": 3,
+        "footOffset": 1.5,
         "footSize": 0.35,
         "mountWidth": 0.7653668647301797,
         "mountHeight": 0.625,
         "material": "aluminium",
         "memberArea": 0.0002,
         "mass": 150,
-        "sprungStiffness": 500000,
-        "sprungStroke": 0.12,
-        "crushForce": 45000,
-        "crushStroke": 0.3,
-        "bodyWidth": 0.7
+        "sprungStiffness": 300000,
+        "sprungStroke": 0.3,
+        "crushForce": 75000,
+        "crushStroke": 0.15,
+        "bodyWidth": 0.9
       }
     },
     {
       "id": "leg3",
       "type": "leg",
       "params": {
-        "length": 2.4,
-        "footOffset": 1.2,
+        "length": 3,
+        "footOffset": 1.5,
         "footSize": 0.35,
         "mountWidth": 0.7653668647301797,
         "mountHeight": 0.625,
         "material": "aluminium",
         "memberArea": 0.0002,
         "mass": 150,
-        "sprungStiffness": 500000,
-        "sprungStroke": 0.12,
-        "crushForce": 45000,
-        "crushStroke": 0.3,
-        "bodyWidth": 0.7
+        "sprungStiffness": 300000,
+        "sprungStroke": 0.3,
+        "crushForce": 75000,
+        "crushStroke": 0.15,
+        "bodyWidth": 0.9
       }
     }
   ],
