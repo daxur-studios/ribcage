@@ -40,6 +40,17 @@ pub const CMD_TERRAIN_HEIGHTS: u32 = 8;
 pub const CMD_ADD_THRUSTER: u32 = 9;
 /// `a` = thruster; `f[0]` = throttle, a finite number from 0 to 1. Result: 1.
 pub const CMD_SET_THROTTLE: u32 = 10;
+/// Adds a segment (plan 005, phase 5.1): `a` = parent segment, or `u32::MAX` for none; `b` = flags
+/// (bit 0 is never-live, any other bit rejects the record); `f[0]` = axial area of the seam to the
+/// parent in square metres, `f[1]` = its bending section, each finite and zero or more (checked for
+/// a root too, then not stored). A parent must already exist: a parent that does not (the new
+/// segment's own number is the cycle of length one) is rejected, so no cycle can form. Its stored
+/// mass starts at zero. Result: the segment's index (numbered in the order added).
+pub const CMD_ADD_SEGMENT: u32 = 11;
+/// Puts a node in a segment: `a` = node, `b` = segment. Adds the node's mass to the segment's
+/// stored mass. Rejected, and nothing changed, when the node is not live or is pinned (no mass to
+/// store), already has a segment, or the segment does not exist. Result: 1.
+pub const CMD_SET_NODE_SEGMENT: u32 = 12;
 
 /// Result slot value for a rejected record.
 pub const REJECTED: u32 = u32::MAX;
@@ -167,6 +178,17 @@ fn apply_one(w: &mut World, c: &Command) -> u32 {
             }
             w.thr_throttle[c.a as usize] = c.f[0];
             1
+        }
+        CMD_ADD_SEGMENT => match w.add_segment(c.a, c.b, c.f[0], c.f[1]) {
+            Some(index) => index,
+            None => REJECTED,
+        },
+        CMD_SET_NODE_SEGMENT => {
+            if w.assign_node_segment(c.a, c.b) {
+                1
+            } else {
+                REJECTED
+            }
         }
         _ => REJECTED,
     }

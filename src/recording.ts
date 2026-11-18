@@ -21,7 +21,7 @@ import { ABI_VERSION, type ApplyResult } from './core.ts';
 import { World } from './world.ts';
 
 export const FORMAT_VERSION = 1;
-/** The oldest core ABI whose recordings still replay (2: before the terrain commands; 3 and 4 also read). */
+/** The oldest core ABI whose recordings still replay (2: before the terrain commands; 3, 4 and 5 also read). */
 export const MIN_READABLE_ABI = 2;
 const MAGIC = [0x52, 0x43, 0x52, 0x44]; // "RCRD"
 const HEADER_BYTES = 40;
@@ -226,8 +226,9 @@ export function decodeRecording(bytes: Uint8Array): Recording {
   const format = v.getUint32(4, true);
   if (format !== FORMAT_VERSION) throw new Error(`recording format ${format}, this build reads ${FORMAT_VERSION}`);
   const abi = v.getUint32(8, true);
-  // ABI 3 and 4 only added command kinds (the terrain, the thrusters), so every ABI 2 or 3 list
-  // means the same thing in them.
+  // ABI 3, 4 and 5 only added command kinds (the terrain, the thrusters, the segments) and, for
+  // the last two, hash sections that exist only once a thruster or segment does, so every older
+  // list means the same thing in them.
   if (abi < MIN_READABLE_ABI || abi > ABI_VERSION) {
     throw new Error(`recorded with core ABI ${abi}, this build reads ABI ${MIN_READABLE_ABI} to ${ABI_VERSION}`);
   }

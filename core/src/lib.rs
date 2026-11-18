@@ -11,6 +11,7 @@ pub mod ffi;
 pub mod island;
 pub mod maths;
 pub mod real;
+pub mod segment;
 pub mod sim;
 pub mod solver;
 pub mod terrain;

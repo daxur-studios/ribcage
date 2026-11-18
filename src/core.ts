@@ -10,7 +10,7 @@
 import { COMMAND_BYTES, type CommandBatch } from './commands.ts';
 
 /** The ABI version this loader was written for (`ABI_VERSION` in core/src/ffi.rs). */
-export const ABI_VERSION = 4;
+export const ABI_VERSION = 5;
 
 /** A host pointer inside the core (an integer to JavaScript). */
 export type HostPtr = number;
@@ -51,6 +51,45 @@ interface Exports {
   rc_beam_flags_ptr(h: number): number;
   rc_write_beams(h: number): number;
   rc_beam_ratio_ptr(h: number): number;
+  rc_physics_hash(h: number): bigint;
+  rc_segment_count(h: number): number;
+  rc_seam_count(h: number): number;
+  rc_node_segment_ptr(h: number): number;
+  rc_segment_flags_ptr(h: number): number;
+  rc_segment_parent_ptr(h: number): number;
+  rc_segment_seam_ptr(h: number): number;
+  rc_segment_mass_ptr(h: number): number;
+  rc_seam_a_ptr(h: number): number;
+  rc_seam_b_ptr(h: number): number;
+  rc_seam_area_ptr(h: number): number;
+  rc_seam_bending_ptr(h: number): number;
+  rc_segment_props(h: number, segment: number): number;
+}
+
+/** Segments, seams and each node's segment, as copies (plan 005, phase 5.1). */
+export interface SegmentView {
+  /** Segment per node slot (`NO_SEGMENT` for none). */
+  nodeSegment: Uint32Array;
+  flags: Uint32Array;
+  /** Parent segment per segment (`NO_SEGMENT` for a root). */
+  parent: Uint32Array;
+  /** Seam to the parent per segment (`NO_SEGMENT` for a root). */
+  seam: Uint32Array;
+  /** Stored mass per segment. */
+  mass: Float64Array;
+  /** Per seam: the parent segment, the child segment, axial area and bending section. */
+  seamA: Uint32Array;
+  seamB: Uint32Array;
+  seamArea: Float64Array;
+  seamBending: Float64Array;
+}
+
+/** A segment's mass, centre and inertia from the current positions (`segment::SegmentProps`). */
+export interface SegmentProps {
+  mass: number;
+  centre: [number, number, number];
+  /** `[xx, yy, zz, xy, xz, yz]`, the products negated. */
+  inertia: [number, number, number, number, number, number];
 }
 
 /** What one batch of commands did: a result per record and the number rejected. */
@@ -163,6 +202,11 @@ export class Core {
     return BigInt.asUintN(64, this.#x.rc_state_hash(h));
   }
 
+  /** The state hash without the segment section (equal to `stateHash` until a segment exists). */
+  physicsHash(h: HostPtr): bigint {
+    return BigInt.asUintN(64, this.#x.rc_physics_hash(h));
+  }
+
   stepCount(h: HostPtr): bigint {
     return BigInt.asUintN(64, this.#x.rc_step_count(h));
   }
@@ -239,5 +283,37 @@ export class Core {
   /** A copy of the node flags, one per node slot. */
   nodeFlags(h: HostPtr): Uint32Array {
     return new Uint32Array(this.#x.memory.buffer, this.#x.rc_node_flags_ptr(h), this.#x.rc_node_count(h)).slice();
+  }
+
+  /** Segments, seams and the node-to-segment table, as copies. */
+  segments(h: HostPtr): SegmentView {
+    const x = this.#x;
+    const nodes = x.rc_node_count(h);
+    const segs = x.rc_segment_count(h);
+    const seams = x.rc_seam_count(h);
+    const mem = x.memory.buffer;
+    return {
+      nodeSegment: new Uint32Array(mem, x.rc_node_segment_ptr(h), nodes).slice(),
+      flags: new Uint32Array(mem, x.rc_segment_flags_ptr(h), segs).slice(),
+      parent: new Uint32Array(mem, x.rc_segment_parent_ptr(h), segs).slice(),
+      seam: new Uint32Array(mem, x.rc_segment_seam_ptr(h), segs).slice(),
+      mass: new Float64Array(mem, x.rc_segment_mass_ptr(h), segs).slice(),
+      seamA: new Uint32Array(mem, x.rc_seam_a_ptr(h), seams).slice(),
+      seamB: new Uint32Array(mem, x.rc_seam_b_ptr(h), seams).slice(),
+      seamArea: new Float64Array(mem, x.rc_seam_area_ptr(h), seams).slice(),
+      seamBending: new Float64Array(mem, x.rc_seam_bending_ptr(h), seams).slice(),
+    };
+  }
+
+  /** One segment's mass, centre and inertia now; `null` when it does not exist or has no mass. */
+  segmentProps(h: HostPtr, segment: number): SegmentProps | null {
+    const ptr = this.#x.rc_segment_props(h, segment);
+    if (ptr === 0) return null;
+    const v = new Float64Array(this.#x.memory.buffer, ptr, 10);
+    return {
+      mass: v[0]!,
+      centre: [v[1]!, v[2]!, v[3]!],
+      inertia: [v[4]!, v[5]!, v[6]!, v[7]!, v[8]!, v[9]!],
+    };
   }
 }

@@ -92,6 +92,19 @@ pub struct World {
     pub thr_head_gen: Vec<u32>,
     pub thr_max: Vec<Real>,
     pub thr_throttle: Vec<Real>,
+    // Segments and seams (plan 005, phase 5.1; see [`crate::segment`]). `node_segment` is per node
+    // slot and always kept (`NO_SEGMENT` until a command assigns it); the rest only grow, so an
+    // index is stable. Read by nothing in the solver, and in the state hash only once a segment
+    // exists.
+    pub node_segment: Vec<u32>,
+    pub seg_flags: Vec<u32>,
+    pub seg_parent: Vec<u32>,
+    pub seg_seam: Vec<u32>,
+    pub seg_mass: Vec<Real>,
+    pub seam_a: Vec<u32>,
+    pub seam_b: Vec<u32>,
+    pub seam_area: Vec<Real>,
+    pub seam_bending: Vec<Real>,
 }
 
 impl Default for World {
@@ -128,6 +141,15 @@ impl Default for World {
             thr_head_gen: Vec::new(),
             thr_max: Vec::new(),
             thr_throttle: Vec::new(),
+            node_segment: Vec::new(),
+            seg_flags: Vec::new(),
+            seg_parent: Vec::new(),
+            seg_seam: Vec::new(),
+            seg_mass: Vec::new(),
+            seam_a: Vec::new(),
+            seam_b: Vec::new(),
+            seam_area: Vec::new(),
+            seam_bending: Vec::new(),
         }
     }
 }
@@ -176,6 +198,8 @@ impl World {
             self.radius[u] = radius;
             self.force[u] = Vec3::ZERO;
             self.node_flags[u] = flags;
+            // `delete_node` already released the old segment; the slot starts with none.
+            self.node_segment[u] = crate::segment::NO_SEGMENT;
             Handle { index: i, generation: self.node_gen[u] }
         } else {
             self.pos.push(pos);
@@ -185,6 +209,7 @@ impl World {
             self.force.push(Vec3::ZERO);
             self.node_flags.push(flags);
             self.node_gen.push(0);
+            self.node_segment.push(crate::segment::NO_SEGMENT);
             Handle { index: self.node_count() - 1, generation: 0 }
         }
     }
@@ -199,6 +224,7 @@ impl World {
         } else {
             self.node_flags[u] &= !NODE_PINNED;
         }
+        self.segment_mass_changed(i);
     }
 
     /// Both endpoints must be live nodes (a beam endpoint is always a node, rule 6).
@@ -255,6 +281,7 @@ impl World {
         }
         self.node_flags[i as usize] = 0;
         self.node_gen[i as usize] = self.node_gen[i as usize].wrapping_add(1);
+        self.release_node_segment(i);
         self.free_nodes.push(Reverse(i));
     }
 

@@ -147,9 +147,45 @@ fn mix_vec(h: &mut u64, v: Vec3) {
 
 /// FNV-1a over the raw bits of positions, velocities, rest lengths and flags, in index
 /// order, plus the step count. Dead slots are included so slot reuse is part of the state.
-/// The terrain (size, origin, cell, friction and every height) follows, if there is one, and then
-/// the thrusters (ends, maximum and throttle), if there are any.
+/// The terrain (size, origin, cell, friction and every height) follows, if there is one, then
+/// the thrusters (ends, maximum and throttle), if there are any, and last the segments and seams
+/// (plan 005), if any segment exists. A world that never ran a segment command hashes exactly as
+/// it did before segments existed; [`physics_hash`] is the hash without the segment section.
 pub fn state_hash(world: &World) -> u64 {
+    let mut h = physics_hash_state(world);
+    // Segments, only once one exists. They change no physics in phase 5.1, so this section is the
+    // only difference from `physics_hash`. Masses and section numbers go in as bits; the tree and
+    // every node's segment, in index order.
+    if !world.seg_parent.is_empty() {
+        mix(&mut h, world.seg_parent.len() as u64);
+        for s in 0..world.seg_parent.len() {
+            mix(&mut h, world.seg_flags[s] as u64);
+            mix(&mut h, world.seg_parent[s] as u64);
+            mix(&mut h, world.seg_seam[s] as u64);
+            mix_real(&mut h, world.seg_mass[s]);
+        }
+        mix(&mut h, world.seam_a.len() as u64);
+        for k in 0..world.seam_a.len() {
+            mix(&mut h, world.seam_a[k] as u64);
+            mix(&mut h, world.seam_b[k] as u64);
+            mix_real(&mut h, world.seam_area[k]);
+            mix_real(&mut h, world.seam_bending[k]);
+        }
+        for i in 0..world.node_segment.len() {
+            mix(&mut h, world.node_segment[i] as u64);
+        }
+    }
+    h
+}
+
+/// The state hash without the segment section: the hash of everything that moves, collides or
+/// pushes. Equal to [`state_hash`] for a world with no segments. The test that segment commands
+/// change no physics compares this against the same run without them.
+pub fn physics_hash(world: &World) -> u64 {
+    physics_hash_state(world)
+}
+
+fn physics_hash_state(world: &World) -> u64 {
     let mut h = FNV_OFFSET;
     mix(&mut h, world.step_count);
     mix(&mut h, world.node_count() as u64);

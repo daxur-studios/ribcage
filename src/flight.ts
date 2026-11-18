@@ -11,7 +11,7 @@
 
 import { CommandBatch } from './commands.ts';
 import { loadCraft, type LoadedCraft } from './parts/craft-file.ts';
-import { compilePart } from './parts/part.ts';
+import { compileCraft } from './parts/assemble.ts';
 import { compileTerrain, landingField, type Terrain } from './terrain.ts';
 
 /** From step `step` (0-based, applied before that step) every thruster is set to `throttle`, 0 to 1. */
@@ -42,15 +42,22 @@ export interface Flight {
   setup: CommandBatch;
   /** How many thrusters the craft has (the throttle commands set thrusters `0 .. thrusterCount - 1`). */
   thrusterCount: number;
+  /** The core's segment number for each craft segment, when the setup carries segment commands. */
+  segmentOf: number[] | null;
 }
 
-/** Loads a craft file and builds its setup on the landing field. Throws what `loadCraft` throws. */
-export function prepareFlight(craftText: string, field: Terrain = landingField()): Flight {
+/**
+ * Loads a craft file and builds its setup on the landing field. Throws what `loadCraft` throws.
+ * `segments` adds the craft's segment commands to the setup (plan 005); it is off here so the
+ * committed hard-landing recording, made before segments existed, is still what recording the hop
+ * gives byte for byte. The segment tests turn it on and show it changes no physics.
+ */
+export function prepareFlight(craftText: string, field: Terrain = landingField(), options: { segments?: boolean } = {}): Flight {
   const loaded = loadCraft(craftText);
   const setup = new CommandBatch();
   compileTerrain(setup, field);
-  compilePart(setup, loaded.craft);
-  return { loaded, field, setup, thrusterCount: loaded.craft.thrusters.length };
+  const segmentOf = compileCraft(setup, loaded.craft, { segments: options.segments ?? false });
+  return { loaded, field, setup, thrusterCount: loaded.craft.thrusters.length, segmentOf };
 }
 
 /**

@@ -6,7 +6,7 @@
  * in the page.
  */
 
-import type { ApplyResult, BeamView, CoreEvent, HostPtr } from './core.ts';
+import type { ApplyResult, BeamView, CoreEvent, HostPtr, SegmentProps, SegmentView } from './core.ts';
 import { Core } from './core.ts';
 import type { CommandBatch } from './commands.ts';
 
@@ -48,6 +48,21 @@ export class World {
 
   get stateHash(): bigint {
     return this.#core.stateHash(this.#h);
+  }
+
+  /** The state hash without the segment section: what moves, collides or pushes. */
+  get physicsHash(): bigint {
+    return this.#core.physicsHash(this.#h);
+  }
+
+  /** Segments, seams and each node's segment (copies). */
+  segments(): SegmentView {
+    return this.#core.segments(this.#h);
+  }
+
+  /** One segment's mass, centre and inertia from the current positions, or `null`. */
+  segmentProps(segment: number): SegmentProps | null {
+    return this.#core.segmentProps(this.#h, segment);
   }
 
   get nodeCount(): number {

@@ -21,15 +21,16 @@ use crate::bench::{apply_gust, bench_scene, BenchSpec};
 use crate::command::{apply_commands, Command, COMMAND_BYTES};
 use crate::event::Event;
 use crate::real::{Real, Vec3};
-use crate::sim::{state_hash, step};
+use crate::sim::{physics_hash, state_hash, step};
 use crate::world::{BeamSpec, World};
 
 /// Bumped by any change to an exported function's signature, to a record layout or to the set of
 /// command kinds. 3 added the terrain commands (kinds 7 and 8); 4 added the thruster commands
-/// (kinds 9 and 10) and puts thrusters in the state hash (only when there are any). Nothing else
-/// changed, so a recording made at ABI 2 or 3 still means the same thing and replays
-/// (`src/recording.ts`).
-pub const ABI_VERSION: u32 = 4;
+/// (kinds 9 and 10) and puts thrusters in the state hash (only when there are any). 5 added the
+/// segment commands (kinds 11 and 12), the segment readers and `rc_physics_hash`, and puts segments
+/// in the state hash (only once a segment exists). Nothing else changed, so a recording made at
+/// ABI 2, 3 or 4 still means the same thing and replays (`src/recording.ts`).
+pub const ABI_VERSION: u32 = 5;
 
 /// Bytes per command record, for the host to check against its own layout.
 #[no_mangle]
@@ -50,6 +51,8 @@ pub struct Host {
     beam_ratio: Vec<f32>,
     /// Nodes that [`rc_bench_step`] pushes (empty for an ordinary host).
     load_nodes: Vec<u32>,
+    /// One segment's mass, centre and inertia, filled by [`rc_segment_props`].
+    segment_props: Vec<Real>,
 }
 
 impl Host {
@@ -62,6 +65,7 @@ impl Host {
             beam_ends: Vec::new(),
             beam_ratio: Vec::new(),
             load_nodes,
+            segment_props: Vec::new(),
         }
     }
 
@@ -163,6 +167,16 @@ pub unsafe extern "C" fn rc_bench_step(h: *mut Host) -> u32 {
 #[no_mangle]
 pub unsafe extern "C" fn rc_state_hash(h: *const Host) -> u64 {
     state_hash(&(*h).world)
+}
+
+/// The state hash without the segment section (`sim::physics_hash`): equal to [`rc_state_hash`]
+/// until a segment exists. The hash that proves segments change no physics.
+///
+/// # Safety
+/// `h` is a live host pointer.
+#[no_mangle]
+pub unsafe extern "C" fn rc_physics_hash(h: *const Host) -> u64 {
+    physics_hash(&(*h).world)
 }
 
 /// Steps taken so far.
@@ -328,4 +342,124 @@ pub unsafe extern "C" fn rc_write_render(h: *mut Host) -> *const f32 {
         host.render.push(p.z as f32);
     }
     host.render.as_ptr()
+}
+
+/// Segments added so far (plan 005).
+///
+/// # Safety
+/// `h` is a live host pointer.
+#[no_mangle]
+pub unsafe extern "C" fn rc_segment_count(h: *const Host) -> u32 {
+    (*h).world.segment_count()
+}
+
+/// Seams added so far: one per segment that has a parent.
+///
+/// # Safety
+/// `h` is a live host pointer.
+#[no_mangle]
+pub unsafe extern "C" fn rc_seam_count(h: *const Host) -> u32 {
+    (*h).world.seam_count()
+}
+
+/// Each node slot's segment, one `u32` (`u32::MAX` for none).
+///
+/// # Safety
+/// `h` is a live host pointer.
+#[no_mangle]
+pub unsafe extern "C" fn rc_node_segment_ptr(h: *const Host) -> *const u32 {
+    (*h).world.node_segment.as_ptr()
+}
+
+/// Segment flags, one `u32` per segment (`segment::SEG_*`).
+///
+/// # Safety
+/// `h` is a live host pointer.
+#[no_mangle]
+pub unsafe extern "C" fn rc_segment_flags_ptr(h: *const Host) -> *const u32 {
+    (*h).world.seg_flags.as_ptr()
+}
+
+/// Each segment's parent segment, one `u32` (`u32::MAX` for a root).
+///
+/// # Safety
+/// `h` is a live host pointer.
+#[no_mangle]
+pub unsafe extern "C" fn rc_segment_parent_ptr(h: *const Host) -> *const u32 {
+    (*h).world.seg_parent.as_ptr()
+}
+
+/// Each segment's seam to its parent, one `u32` (`u32::MAX` for a root).
+///
+/// # Safety
+/// `h` is a live host pointer.
+#[no_mangle]
+pub unsafe extern "C" fn rc_segment_seam_ptr(h: *const Host) -> *const u32 {
+    (*h).world.seg_seam.as_ptr()
+}
+
+/// Each segment's stored mass, one `Real`.
+///
+/// # Safety
+/// `h` is a live host pointer.
+#[no_mangle]
+pub unsafe extern "C" fn rc_segment_mass_ptr(h: *const Host) -> *const Real {
+    (*h).world.seg_mass.as_ptr()
+}
+
+/// Each seam's parent segment, one `u32`.
+///
+/// # Safety
+/// `h` is a live host pointer.
+#[no_mangle]
+pub unsafe extern "C" fn rc_seam_a_ptr(h: *const Host) -> *const u32 {
+    (*h).world.seam_a.as_ptr()
+}
+
+/// Each seam's child segment, one `u32`.
+///
+/// # Safety
+/// `h` is a live host pointer.
+#[no_mangle]
+pub unsafe extern "C" fn rc_seam_b_ptr(h: *const Host) -> *const u32 {
+    (*h).world.seam_b.as_ptr()
+}
+
+/// Each seam's axial area, one `Real`.
+///
+/// # Safety
+/// `h` is a live host pointer.
+#[no_mangle]
+pub unsafe extern "C" fn rc_seam_area_ptr(h: *const Host) -> *const Real {
+    (*h).world.seam_area.as_ptr()
+}
+
+/// Each seam's bending section, one `Real`.
+///
+/// # Safety
+/// `h` is a live host pointer.
+#[no_mangle]
+pub unsafe extern "C" fn rc_seam_bending_ptr(h: *const Host) -> *const Real {
+    (*h).world.seam_bending.as_ptr()
+}
+
+/// Computes one segment's mass, centre and inertia from the current positions and returns ten
+/// `Real`: mass, centre x y z, then inertia `xx yy zz xy xz yz` (products negated, see
+/// `segment::SegmentProps`). Null when the segment does not exist or has no mass. Valid until the
+/// next call to this function.
+///
+/// # Safety
+/// `h` is a live host pointer.
+#[no_mangle]
+pub unsafe extern "C" fn rc_segment_props(h: *mut Host, segment: u32) -> *const Real {
+    let host = &mut *h;
+    match host.world.segment_centre_and_inertia(segment) {
+        None => std::ptr::null(),
+        Some(p) => {
+            host.segment_props.clear();
+            host.segment_props.extend_from_slice(&[p.mass, p.centre.x, p.centre.y, p.centre.z]);
+            host.segment_props.extend_from_slice(&p.inertia);
+            host.segment_props.as_ptr()
+        }
+    }
 }

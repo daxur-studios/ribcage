@@ -19,6 +19,13 @@ export const CMD_SET_TERRAIN = 7;
 export const CMD_TERRAIN_HEIGHTS = 8;
 export const CMD_ADD_THRUSTER = 9;
 export const CMD_SET_THROTTLE = 10;
+export const CMD_ADD_SEGMENT = 11;
+export const CMD_SET_NODE_SEGMENT = 12;
+
+/** No segment: a root's parent, a node with no segment (`segment::NO_SEGMENT`). */
+export const NO_SEGMENT = 0xffff_ffff;
+/** Segment flag: never simulated as a live lattice once rigid bodies exist (`segment::SEG_NEVER_LIVE`). */
+export const SEG_NEVER_LIVE = 1;
 
 /** Most grid points along one side of a terrain (`terrain::MAX_GRID`). */
 export const MAX_TERRAIN_GRID = 257;
@@ -148,6 +155,20 @@ export class CommandBatch {
   /** Sets a thruster's throttle, 0 to 1. It pushes every step from now until it is set again. */
   setThrottle(thruster: number, throttle: number): number {
     return this.#push(CMD_SET_THROTTLE, thruster, 0, [throttle]);
+  }
+
+  /**
+   * Adds a segment (plan 005). `parent` is a segment already added, or `NO_SEGMENT` for a root;
+   * `area` and `bending` describe the seam to the parent (finite, zero or more; a root's are checked
+   * and not stored). The core's result is the segment's index, numbered in the order added.
+   */
+  addSegment(parent: number, flags: number, area: number, bending: number): number {
+    return this.#push(CMD_ADD_SEGMENT, parent, flags, [area, bending]);
+  }
+
+  /** Puts a node in a segment; its mass joins the segment's stored mass. A node has one segment. */
+  setNodeSegment(node: number, segment: number): number {
+    return this.#push(CMD_SET_NODE_SEGMENT, node, segment, []);
   }
 
   /** The whole height array as records of six (the last may be shorter), in index order. */

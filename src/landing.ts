@@ -220,8 +220,8 @@ export interface Hop {
  * nodes of the tank's middle ring that are furthest apart along x, so it pushes toward +x at about
  * the height of the centre of mass. The thruster is appended to the setup, after the craft's own.
  */
-export function prepareHop(craftText: string): Hop {
-  const flight = prepareFlight(craftText);
+export function prepareHop(craftText: string, options: { segments?: boolean } = {}): Hop {
+  const flight = prepareFlight(craftText, undefined, options);
   const craft = flight.loaded.craft;
   const tank = partNodes(craft, 'tank');
   const ys = [...new Set(tank.map((i) => craft.nodes[i]!.y))].sort((a, b) => a - b);

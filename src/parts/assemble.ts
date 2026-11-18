@@ -45,6 +45,8 @@ import {
   type Segment,
   type V3,
 } from './part.ts';
+import { NO_SEGMENT, SEG_NEVER_LIVE, type CommandBatch } from '../commands.ts';
+import { compilePart } from './part.ts';
 import { unitCosSin } from './shared.ts';
 
 /** How far apart two nodes to be merged may be after the child is placed, in metres (Plan 004: 1 mm). */
@@ -563,4 +565,70 @@ function fixTotalMass(nodes: PartNode[], target: number): void {
     if (sum === target) return;
     last.mass += target - sum;
   }
+}
+
+/** Options of `compileCraft`. */
+export interface CompileCraftOptions {
+  /** Emit the segment commands after the craft's thrusters (default true; plan 005, phase 5.1). */
+  segments?: boolean;
+}
+
+/**
+ * Appends a craft to `batch`: `compilePart` (nodes, beams, thrusters), then, unless `segments` is
+ * false, its segments, seams and tree as `CMD_ADD_SEGMENT` and `CMD_SET_NODE_SEGMENT` records, in
+ * that order. Returns the core's segment number for each craft segment (for an empty world these
+ * are the numbers the records get), or `null` when no segments were emitted.
+ *
+ * The core's tree is made from the craft's seams: from craft segment 0 (the root part's first), a
+ * breadth-first walk over the seams gives every segment its parent and the seam's area and bending;
+ * a segment the seams do not reach becomes a root. A core segment needs its parent to exist first,
+ * so records go out in "lowest-numbered segment whose parent is already out" order; for the hopper
+ * that is craft order, so the core's numbers equal the craft's. They change no physics.
+ */
+export function compileCraft(batch: CommandBatch, craft: Craft, options: CompileCraftOptions = {}): number[] | null {
+  compilePart(batch, craft);
+  if (options.segments === false) return null;
+  const count = craft.segments.length;
+  // Tree from the seams, discovered breadth-first from segment 0 and then from any segment left over.
+  const parent: (number | null)[] = new Array(count).fill(null);
+  const seamOf: (number | null)[] = new Array(count).fill(null);
+  const seen: boolean[] = new Array(count).fill(false);
+  for (let start = 0; start < count; start++) {
+    if (seen[start]) continue;
+    seen[start] = true;
+    const queue = [start];
+    for (let head = 0; head < queue.length; head++) {
+      const s = queue[head]!;
+      for (const [k, seam] of craft.seams.entries()) {
+        const other = seam.segmentA === s ? seam.segmentB : seam.segmentB === s ? seam.segmentA : -1;
+        if (other < 0 || other >= count || seen[other]) continue;
+        seen[other] = true;
+        parent[other] = s;
+        seamOf[other] = k;
+        queue.push(other);
+      }
+    }
+  }
+  // Emit in "lowest ready segment first" order.
+  const coreOf: number[] = new Array(count).fill(-1);
+  let next = 0;
+  for (let emitted = 0; emitted < count; emitted++) {
+    let pick = -1;
+    for (let s = 0; s < count; s++) {
+      if (coreOf[s]! < 0 && (parent[s] === null || coreOf[parent[s]!]! >= 0)) {
+        pick = s;
+        break;
+      }
+    }
+    const seam = seamOf[pick] === null ? null : craft.seams[seamOf[pick]!]!;
+    batch.addSegment(
+      parent[pick] === null ? NO_SEGMENT : coreOf[parent[pick]!]!,
+      craft.segments[pick]!.neverLive ? SEG_NEVER_LIVE : 0,
+      seam?.area ?? 0,
+      seam?.bending ?? 0,
+    );
+    coreOf[pick] = next++;
+  }
+  for (const [i, n] of craft.nodes.entries()) batch.setNodeSegment(i, coreOf[n.segment]!);
+  return coreOf;
 }

@@ -1,6 +1,6 @@
 # ribcage roadmap
 
-**TL;DR.** Overall progress: **44%**. Now: milestones 1 (solver core and tools), 2 (2D bridge builder) are complete, and so is milestone 3 (3D on terrain in Three.js): terrain, ground contact, a tower and a bridge that stand and collapse, the Three.js page with time controls, record and replay and panels skinned to the nodes (see [Plan 003](docs/plans/003_terrain_3d.md)). Milestone 4 (parts and assembly, [Plan 004](docs/plans/004_parts_and_assembly.md)) is complete: the hopper is assembled from parts, lifts off, and its hard landing snaps a leg on the craft page; the assembly panel puts it together by clicks to the same hash, and the demo is recorded. The first playable slice ends here. Next is milestone 5 (rigid by default).
+**TL;DR.** Overall progress: **44%**. Now: milestones 1 (solver core and tools), 2 (2D bridge builder) are complete, and so is milestone 3 (3D on terrain in Three.js): terrain, ground contact, a tower and a bridge that stand and collapse, the Three.js page with time controls, record and replay and panels skinned to the nodes (see [Plan 003](docs/plans/003_terrain_3d.md)). Milestone 4 (parts and assembly, [Plan 004](docs/plans/004_parts_and_assembly.md)) is complete: the hopper is assembled from parts, lifts off, and its hard landing snaps a leg on the craft page; the assembly panel puts it together by clicks to the same hash, and the demo is recorded. The first playable slice ends here. Milestone 5 (rigid by default, [Plan 005](docs/plans/005_rigid_by_default.md)) has started: segments, seams and the assembly tree are in the core.
 
 This page is the single answer to "what are we building, and how far along is it?". The design is the [spec](docs/research/node-beam-engine-design-spec.md). The detailed work for the current milestone lives in its plan.
 
@@ -88,7 +88,7 @@ Planning has two stages. The costly-to-redo milestones (5 and 8) have an early d
 - [x] Engines produce thrust and the craft lifts off. (Headless: `src/flight.ts` plays a throttle script on the landing field; at full throttle the hopper accelerates at thrust over mass minus gravity within 0.01%, level to under 0.02°, with nothing yielding; eased on just under hover it stays on the pad; the same script gives the same hash; see ER 004, phase 4.7. Seen on the page in 4.9: `web/craft.html` lifts off on full throttle.)
 - [x] **Test of fun:** a hard landing on rough terrain snaps a leg and the craft tips over. (Bands in `test/landing.test.ts` pass, ER 004 phases 4.8 and 4.9; the snap is seen on the craft page: the scripted hop loses two legs, shows yielded beams in purple and tips the craft to about 100°, and the page's final hash equals Node's.)
 
-### 5. Rigid by default
+### 5. Rigid by default ([Plan 005](docs/plans/005_rigid_by_default.md))
 
 - [ ] Rigid bodies with anchors carry engines, pods and wheels.
 - [ ] Hinges, joint limits, servos and rotors work, and a stalled servo adds no energy.

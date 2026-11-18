@@ -235,5 +235,9 @@ test("the committed hard landing replays to its hash, and recording it again giv
   assert.equal(result.ok, true);
   assert.equal(result.steps, HOP_STEPS);
   assert.equal(result.hash, hash);
-  assert.deepEqual(fresh, stored);
+  // Same bytes except the ABI field: the stored file was made at ABI 4, before the segment
+  // commands (ABI 5 only added command kinds), and replaying it above is the real check.
+  const atStoredAbi = fresh.slice();
+  atStoredAbi.set(stored.subarray(8, 12), 8);
+  assert.deepEqual(atStoredAbi, stored);
 });
