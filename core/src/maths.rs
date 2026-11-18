@@ -123,6 +123,47 @@ pub fn sin_cos(x: Real) -> (Real, Real) {
     }
 }
 
+/// Arctangent of `z` for `|z| ≤ 1`. Two half-angle steps, `atan z = 2 atan(z / (1 + √(1 + z²)))`,
+/// bring `|z|` to at most `tan(π/16) ≈ 0.199`, then the odd series to `z²¹`, Horner form. The
+/// series' truncation is below `1e-16` there; each half-angle step costs one square root and one
+/// divide (phase 5.5).
+fn atan_unit(z: Real) -> Real {
+    let z1 = z / (1.0 + (1.0 + z * z).sqrt());
+    let t = z1 / (1.0 + (1.0 + z1 * z1).sqrt());
+    let u = t * t;
+    let mut p: Real = 1.0 / 21.0;
+    for k in [19.0, 17.0, 15.0, 13.0, 11.0, 9.0, 7.0, 5.0, 3.0, 1.0] {
+        p = 1.0 / k - u * p;
+    }
+    4.0 * (t * p)
+}
+
+/// The angle of the point `(x, y)` from the positive x axis, in `(-π, π]` (phase 5.5, joint
+/// angles). Zero for the origin. Built from the half angle: with `r = √(x² + y²)`,
+/// `tan(θ/2) = y / (r + x) = (r − x) / y`; the first form is used for `x ≥ 0` (where
+/// `|tan(θ/2)| ≤ 1`), the second for `x < 0` (where it is at least 1 and its reciprocal goes to
+/// [`atan_unit`]). Only add, subtract, multiply, divide and square root, so the bits are the same
+/// everywhere. Absolute error at most about `9e-16` (two ulps near ±π), measured against the platform library in
+/// `core/tests/maths.rs`. NaN in, NaN out.
+pub fn atan2(y: Real, x: Real) -> Real {
+    if y == 0.0 {
+        return if x < 0.0 { PI } else { 0.0 };
+    }
+    let r = (x * x + y * y).sqrt();
+    if x >= 0.0 {
+        2.0 * atan_unit(y / (r + x))
+    } else {
+        // tan(θ/2) = (r − x) / y, at least 1 in size: atan t = ±π/2 − atan(1/t).
+        let inv = y / (r - x);
+        let half = if y > 0.0 {
+            0.5 * PI - atan_unit(inv)
+        } else {
+            -0.5 * PI - atan_unit(inv)
+        };
+        2.0 * half
+    }
+}
+
 // ---------------------------------------------------------------------------------------------
 // Rotations and 3 by 3 matrices for rigid bodies (plan 005, phase 5.2). Only add, subtract,
 // multiply, divide and square root, each expression in a fixed order, so native and WebAssembly
@@ -147,7 +188,12 @@ impl Default for Quat {
 }
 
 impl Quat {
-    pub const IDENTITY: Quat = Quat { w: 1.0, x: 0.0, y: 0.0, z: 0.0 };
+    pub const IDENTITY: Quat = Quat {
+        w: 1.0,
+        x: 0.0,
+        y: 0.0,
+        z: 0.0,
+    };
 
     pub const fn new(w: Real, x: Real, y: Real, z: Real) -> Quat {
         Quat { w, x, y, z }
@@ -187,7 +233,11 @@ impl Quat {
     pub fn delta_vec(self, p: Quat) -> Vec3 {
         let (q, pv) = (self.vec(), p.vec());
         let c = q.cross(pv);
-        Vec3::new((p.w * q.x - self.w * pv.x) - c.x, (p.w * q.y - self.w * pv.y) - c.y, (p.w * q.z - self.w * pv.z) - c.z)
+        Vec3::new(
+            (p.w * q.x - self.w * pv.x) - c.x,
+            (p.w * q.y - self.w * pv.y) - c.y,
+            (p.w * q.z - self.w * pv.z) - c.z,
+        )
     }
 
     /// The scalar part of `self ⊗ conj(p)`.
@@ -246,10 +296,24 @@ pub struct Sym3 {
 }
 
 impl Sym3 {
-    pub const ZERO: Sym3 = Sym3 { xx: 0.0, yy: 0.0, zz: 0.0, xy: 0.0, xz: 0.0, yz: 0.0 };
+    pub const ZERO: Sym3 = Sym3 {
+        xx: 0.0,
+        yy: 0.0,
+        zz: 0.0,
+        xy: 0.0,
+        xz: 0.0,
+        yz: 0.0,
+    };
 
     pub const fn diag(x: Real, y: Real, z: Real) -> Sym3 {
-        Sym3 { xx: x, yy: y, zz: z, xy: 0.0, xz: 0.0, yz: 0.0 }
+        Sym3 {
+            xx: x,
+            yy: y,
+            zz: z,
+            xy: 0.0,
+            xz: 0.0,
+            yz: 0.0,
+        }
     }
 
     pub fn mul_vec(self, v: Vec3) -> Vec3 {
@@ -313,18 +377,40 @@ impl Sym3 {
         if det == 0.0 || !det.is_finite() {
             return None;
         }
-        Some(Sym3 { xx: a.xx / det, yy: a.yy / det, zz: a.zz / det, xy: a.xy / det, xz: a.xz / det, yz: a.yz / det })
+        Some(Sym3 {
+            xx: a.xx / det,
+            yy: a.yy / det,
+            zz: a.zz / det,
+            xy: a.xy / det,
+            xz: a.xz / det,
+            yz: a.yz / det,
+        })
     }
 
     pub fn to_mat3(self) -> Mat3 {
-        Mat3 { m: [[self.xx, self.xy, self.xz], [self.xy, self.yy, self.yz], [self.xz, self.yz, self.zz]] }
+        Mat3 {
+            m: [
+                [self.xx, self.xy, self.xz],
+                [self.xy, self.yy, self.yz],
+                [self.xz, self.yz, self.zz],
+            ],
+        }
     }
 
     /// `R S Rᵀ` for a rotation `R`: an inertia tensor moved from the body frame to the world.
     pub fn rotated(self, r: &Mat3) -> Sym3 {
         let rs = r.mul(&self.to_mat3());
-        let e = |i: usize, j: usize| rs.m[i][0] * r.m[j][0] + rs.m[i][1] * r.m[j][1] + rs.m[i][2] * r.m[j][2];
-        Sym3 { xx: e(0, 0), yy: e(1, 1), zz: e(2, 2), xy: e(0, 1), xz: e(0, 2), yz: e(1, 2) }
+        let e = |i: usize, j: usize| {
+            rs.m[i][0] * r.m[j][0] + rs.m[i][1] * r.m[j][1] + rs.m[i][2] * r.m[j][2]
+        };
+        Sym3 {
+            xx: e(0, 0),
+            yy: e(1, 1),
+            zz: e(2, 2),
+            xy: e(0, 1),
+            xz: e(0, 2),
+            yz: e(1, 2),
+        }
     }
 
     pub fn is_finite(self) -> bool {
@@ -344,11 +430,15 @@ pub struct Mat3 {
 }
 
 impl Mat3 {
-    pub const IDENTITY: Mat3 = Mat3 { m: [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]] };
+    pub const IDENTITY: Mat3 = Mat3 {
+        m: [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
+    };
 
     /// The cross-product matrix: `skew(v) u = v × u`.
     pub fn skew(v: Vec3) -> Mat3 {
-        Mat3 { m: [[0.0, -v.z, v.y], [v.z, 0.0, -v.x], [-v.y, v.x, 0.0]] }
+        Mat3 {
+            m: [[0.0, -v.z, v.y], [v.z, 0.0, -v.x], [-v.y, v.x, 0.0]],
+        }
     }
 
     pub fn mul_vec(&self, v: Vec3) -> Vec3 {
@@ -374,7 +464,8 @@ impl Mat3 {
         let mut out = Mat3::default();
         for i in 0..3 {
             for j in 0..3 {
-                out.m[i][j] = self.m[i][0] * o.m[0][j] + self.m[i][1] * o.m[1][j] + self.m[i][2] * o.m[2][j];
+                out.m[i][j] =
+                    self.m[i][0] * o.m[0][j] + self.m[i][1] * o.m[1][j] + self.m[i][2] * o.m[2][j];
             }
         }
         out

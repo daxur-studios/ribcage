@@ -14,6 +14,7 @@ use crate::body::{derive_body, predict_body, NO_BODY};
 use crate::event::{Event, EVENT_FREEZE};
 use crate::failure::check_failure;
 use crate::island::Island;
+use crate::joint::{geometry, solve_joint, wrap, JOINT_MOVE_EPS};
 use crate::maths::{Quat, Sym3};
 use crate::real::{Real, Vec3};
 use crate::sim::gravity_at;
@@ -67,7 +68,10 @@ pub struct SubstepRule {
 }
 
 impl SubstepRule {
-    pub const DEFAULT: SubstepRule = SubstepRule { c: SUBSTEP_C, max: MAX_SUBSTEPS };
+    pub const DEFAULT: SubstepRule = SubstepRule {
+        c: SUBSTEP_C,
+        max: MAX_SUBSTEPS,
+    };
 }
 
 /// [`substep_count`] with an explicit rule. Same arithmetic, so `DEFAULT` gives the same bits.
@@ -77,10 +81,13 @@ pub fn substep_count_with(isl: &Island, rule: SubstepRule) -> u32 {
     let m = mass!(isl);
     for k in 0..isl.beam_a.len() {
         let w = match (m.end(isl.beam_a[k]), m.end(isl.beam_b[k])) {
-            (Endpoint::Node(a), Endpoint::Node(b)) => isl.inv_mass[a as usize] + isl.inv_mass[b as usize],
+            (Endpoint::Node(a), Endpoint::Node(b)) => {
+                isl.inv_mass[a as usize] + isl.inv_mass[b as usize]
+            }
             // A riding end weighs by the beam's direction at the step's start (phase 5.3).
             (a, b) => {
-                let d = b.place(&m, &isl.pos, &isl.body_centre, &isl.body_rot) - a.place(&m, &isl.pos, &isl.body_centre, &isl.body_rot);
+                let d = b.place(&m, &isl.pos, &isl.body_centre, &isl.body_rot)
+                    - a.place(&m, &isl.pos, &isl.body_centre, &isl.body_rot);
                 let len = d.length();
                 let dir = if len > 0.0 { d / len } else { Vec3::ZERO };
                 a.weight(&m, &isl.body_rot, dir) + b.weight(&m, &isl.body_rot, dir)
@@ -126,7 +133,13 @@ pub struct Mass<'a> {
 impl<'a> Mass<'a> {
     /// Loose nodes only, no bodies.
     pub fn nodes(inv_mass: &'a [Real]) -> Mass<'a> {
-        Mass { node: inv_mass, node_body: &[], offset: &[], body: &[], inertia: &[] }
+        Mass {
+            node: inv_mass,
+            node_body: &[],
+            offset: &[],
+            body: &[],
+            inertia: &[],
+        }
     }
 
     /// The end packed node `i` is: a point of its body ([`Endpoint::Riding`]) or itself.
@@ -149,7 +162,11 @@ pub struct Pose<'a> {
 impl<'a> Pose<'a> {
     /// Loose nodes only, no bodies.
     pub fn nodes(pos: &'a mut [Vec3]) -> Pose<'a> {
-        Pose { pos, centre: &mut [], rot: &mut [] }
+        Pose {
+            pos,
+            centre: &mut [],
+            rot: &mut [],
+        }
     }
 }
 
@@ -228,7 +245,8 @@ impl Endpoint {
             Endpoint::Node(i) => pos[i as usize],
             Endpoint::Fixed => Vec3::ZERO,
             Endpoint::Point(a, b, t) => {
-                m.end(a).place(m, pos, centre, rot) * (1.0 - t) + m.end(b).place(m, pos, centre, rot) * t
+                m.end(a).place(m, pos, centre, rot) * (1.0 - t)
+                    + m.end(b).place(m, pos, centre, rot) * t
             }
             Endpoint::Riding(b, local) => centre[b as usize] + rot[b as usize].rotate(local),
         }
@@ -269,7 +287,13 @@ impl Endpoint {
                 let dt = turn(m, q, b, q.rotate(local).cross(p));
                 s.centre[b] = s.centre[b] + p * m.body[b];
                 let d = Quat::new(0.0, dt.x, dt.y, dt.z).mul(q);
-                s.rot[b] = Quat::new(q.w + 0.5 * d.w, q.x + 0.5 * d.x, q.y + 0.5 * d.y, q.z + 0.5 * d.z).normalize();
+                s.rot[b] = Quat::new(
+                    q.w + 0.5 * d.w,
+                    q.x + 0.5 * d.x,
+                    q.y + 0.5 * d.y,
+                    q.z + 0.5 * d.z,
+                )
+                .normalize();
             }
         }
     }
@@ -280,7 +304,9 @@ impl Endpoint {
         match self {
             Endpoint::Node(i) => v.node[i as usize],
             Endpoint::Fixed => Vec3::ZERO,
-            Endpoint::Point(a, b, t) => m.end(a).velocity(m, rot, v) * (1.0 - t) + m.end(b).velocity(m, rot, v) * t,
+            Endpoint::Point(a, b, t) => {
+                m.end(a).velocity(m, rot, v) * (1.0 - t) + m.end(b).velocity(m, rot, v) * t
+            }
             Endpoint::Riding(b, local) => {
                 let b = b as usize;
                 v.lin[b] + v.ang[b].cross(rot[b].rotate(local))
@@ -423,12 +449,25 @@ pub fn push_ground_contact(
 /// that touches a body: the recovery turned the body's start pose, which is not slip.
 #[allow(clippy::too_many_arguments)]
 #[inline]
-pub fn ground_friction(s: &mut Pose, start: &Pose, m: &Mass, end: Endpoint, normal: Vec3, dl_n: Real, p0: Vec3, mu: Real) {
+pub fn ground_friction(
+    s: &mut Pose,
+    start: &Pose,
+    m: &Mass,
+    end: Endpoint,
+    normal: Vec3,
+    dl_n: Real,
+    p0: Vec3,
+    mu: Real,
+) {
     if dl_n == 0.0 {
         return;
     }
     let ground = Endpoint::Fixed;
-    let p0 = if end.touches_body(m) { end.place(m, start.pos, start.centre, start.rot) } else { p0 };
+    let p0 = if end.touches_body(m) {
+        end.place(m, start.pos, start.centre, start.rot)
+    } else {
+        p0
+    };
     let moved = end.place(m, s.pos, s.centre, s.rot) - p0;
     let slip = moved - normal * normal.dot(moved);
     let sl = slip.length();
@@ -614,7 +653,37 @@ pub fn solve_island(isl: &mut Island, n: u32, max_speed: Real) -> SolveOutput {
     let mut was_clamped = vec![false; nodes];
     let mut pushes = vec![(0.0 as Real, Vec3::ZERO); isl.contact_node.len()];
     let mut clamped = 0u32;
+    // Joints (phase 5.5): their kernel ends, the angle at the step's start, and each substep's
+    // start angle for the drives.
+    let joints = isl.joint_world.len();
+    let joint_ends: Vec<[Endpoint; 6]> = {
+        let m = mass!(isl);
+        isl.joint_ends.iter().map(|e| e.map(|i| m.end(i))).collect()
+    };
+    let joint_angle_at = |isl: &Island, j: usize| -> Real {
+        let m = mass!(isl);
+        match geometry(
+            &m,
+            &isl.pos,
+            &isl.body_centre,
+            &isl.body_rot,
+            &joint_ends[j],
+            isl.joint_spec[j].zero,
+        ) {
+            Some(g) => g.angle,
+            None => Real::NAN,
+        }
+    };
+    let joint_start: Vec<Real> = (0..joints).map(|j| joint_angle_at(isl, j)).collect();
+    let mut phi0 = joint_start.clone();
+    let mut joint_torque = vec![0.0 as Real; joints];
+    let mut joint_peak = vec![0.0 as Real; joints];
     for substep in 1..=n {
+        if substep > 1 {
+            for j in 0..joints {
+                phi0[j] = joint_angle_at(isl, j);
+            }
+        }
         for i in 0..nodes {
             prev[i] = isl.pos[i];
             let w = isl.inv_mass[i];
@@ -632,10 +701,18 @@ pub fn solve_island(isl: &mut Island, n: u32, max_speed: Real) -> SolveOutput {
         }
         {
             let m = mass!(isl);
-            let mut s = Pose { pos: &mut isl.pos, centre: &mut isl.body_centre, rot: &mut isl.body_rot };
+            let mut s = Pose {
+                pos: &mut isl.pos,
+                centre: &mut isl.body_centre,
+                rot: &mut isl.body_rot,
+            };
             for k in 0..beams {
                 // No original length means no strain scale, so no cap (a generator bug 1.6 guards).
-                let yield_elong = if isl.rest0[k] == 0.0 { Real::INFINITY } else { isl.yield_strain[k] * isl.rest0[k] };
+                let yield_elong = if isl.rest0[k] == 0.0 {
+                    Real::INFINITY
+                } else {
+                    isl.yield_strain[k] * isl.rest0[k]
+                };
                 let (dl, yielded) = solve_distance(
                     &mut s,
                     &m,
@@ -651,10 +728,27 @@ pub fn solve_island(isl: &mut Island, n: u32, max_speed: Real) -> SolveOutput {
                 }
                 isl.last_lambda[k] = -dl / (h * h);
             }
+            // Joints after the beams, before the ground, in ascending joint order (phase 5.5).
+            for j in 0..joints {
+                let t = solve_joint(&mut s, &m, &joint_ends[j], &isl.joint_spec[j], phi0[j], h);
+                joint_torque[j] = t;
+                let a = if t < 0.0 { -t } else { t };
+                if a > joint_peak[j] {
+                    joint_peak[j] = a;
+                }
+            }
             // Ground contacts after the beams: node contacts in ascending packed node order,
             // then beam midpoints in ascending beam order (phases 3.2 and 3.3).
-            let mut start = Pose { pos: &mut prev, centre: &mut prev_centre, rot: &mut prev_rot };
-            let mut pred = Pose { pos: &mut [], centre: &mut isl.body_pred_centre, rot: &mut isl.body_pred_rot };
+            let mut start = Pose {
+                pos: &mut prev,
+                centre: &mut prev_centre,
+                rot: &mut prev_rot,
+            };
+            let mut pred = Pose {
+                pos: &mut [],
+                centre: &mut isl.body_pred_centre,
+                rot: &mut isl.body_pred_rot,
+            };
             // Node contacts in two passes: every push, then every friction (phase 5.3). A
             // loose node's contact touches only that node, so for loose nodes this is the same
             // arithmetic as one pass; for a body's corners it keeps one corner's push from
@@ -675,7 +769,16 @@ pub fn solve_island(isl: &mut Island, n: u32, max_speed: Real) -> SolveOutput {
             }
             for c in 0..isl.contact_node.len() {
                 let (dl_n, p0) = pushes[c];
-                ground_friction(&mut s, &start, &m, m.end(isl.contact_node[c]), isl.contact_normal[c], dl_n, p0, isl.friction);
+                ground_friction(
+                    &mut s,
+                    &start,
+                    &m,
+                    m.end(isl.contact_node[c]),
+                    isl.contact_normal[c],
+                    dl_n,
+                    p0,
+                    isl.friction,
+                );
             }
             for c in 0..isl.beam_contact.len() {
                 let k = isl.beam_contact[c] as usize;
@@ -706,7 +809,11 @@ pub fn solve_island(isl: &mut Island, n: u32, max_speed: Real) -> SolveOutput {
         }
         {
             let m = mass!(isl);
-            let mut v = Vel { node: &mut isl.vel, lin: &mut isl.body_vel, ang: &mut isl.body_omega };
+            let mut v = Vel {
+                node: &mut isl.vel,
+                lin: &mut isl.body_vel,
+                ang: &mut isl.body_omega,
+            };
             for k in 0..beams {
                 damp_beam(
                     &isl.pos,
@@ -738,7 +845,13 @@ pub fn solve_island(isl: &mut Island, n: u32, max_speed: Real) -> SolveOutput {
                 }
             }
             let (p, v) = (isl.pos[i], isl.vel[i]);
-            if !(p.x.is_finite() && p.y.is_finite() && p.z.is_finite() && v.x.is_finite() && v.y.is_finite() && v.z.is_finite()) {
+            if !(p.x.is_finite()
+                && p.y.is_finite()
+                && p.z.is_finite()
+                && v.x.is_finite()
+                && v.y.is_finite()
+                && v.z.is_finite())
+            {
                 bad = true;
             }
         }
@@ -747,14 +860,22 @@ pub fn solve_island(isl: &mut Island, n: u32, max_speed: Real) -> SolveOutput {
             if speed > max_speed {
                 isl.body_vel[b] = isl.body_vel[b] * (max_speed / speed);
             }
-            if !(isl.body_centre[b].is_finite() && isl.body_rot[b].is_finite() && isl.body_vel[b].is_finite() && isl.body_omega[b].is_finite()) {
+            if !(isl.body_centre[b].is_finite()
+                && isl.body_rot[b].is_finite()
+                && isl.body_vel[b].is_finite()
+                && isl.body_omega[b].is_finite())
+            {
                 bad = true;
             }
         }
         if bad {
             for i in 0..nodes {
                 isl.pos[i] = start_pos[i];
-                isl.vel[i] = if isl.inv_mass[i] != 0.0 || isl.rides(i) { Vec3::ZERO } else { start_vel[i] };
+                isl.vel[i] = if isl.inv_mass[i] != 0.0 || isl.rides(i) {
+                    Vec3::ZERO
+                } else {
+                    start_vel[i]
+                };
             }
             for b in 0..bodies {
                 isl.body_centre[b] = start_centre[b];
@@ -767,8 +888,17 @@ pub fn solve_island(isl: &mut Island, n: u32, max_speed: Real) -> SolveOutput {
             isl.rest.copy_from_slice(&start_rest);
             isl.beam_flags.copy_from_slice(&flags_before);
             isl.last_lambda.copy_from_slice(&start_lambda);
-            let event = Event { kind: EVENT_FREEZE, index: isl.root, step: 0, value: substep as Real };
-            return SolveOutput { events: vec![event], clamped, frozen: true };
+            let event = Event {
+                kind: EVENT_FREEZE,
+                index: isl.root,
+                step: 0,
+                value: substep as Real,
+            };
+            return SolveOutput {
+                events: vec![event],
+                clamped,
+                frozen: true,
+            };
         }
     }
     // Riders follow their bodies, once per step, in node order (break reads their positions).
@@ -781,7 +911,19 @@ pub fn solve_island(isl: &mut Island, n: u32, max_speed: Real) -> SolveOutput {
         isl.pos[i] = p;
         isl.vel[i] = isl.body_vel[b] + isl.body_omega[b].cross(p - isl.body_centre[b]);
     }
-    SolveOutput { events: check_failure(isl, &flags_before), clamped, frozen: false }
+    for j in 0..joints {
+        let end = joint_angle_at(isl, j);
+        let d = wrap(end - joint_start[j]);
+        isl.joint_angle[j] = end;
+        isl.joint_torque[j] = joint_torque[j];
+        isl.joint_peak[j] = joint_peak[j];
+        isl.joint_moved[j] = d > JOINT_MOVE_EPS || d < -JOINT_MOVE_EPS;
+    }
+    SolveOutput {
+        events: check_failure(isl, &flags_before),
+        clamped,
+        frozen: false,
+    }
 }
 
 #[cfg(test)]
@@ -794,7 +936,13 @@ mod tests {
     const G: Real = 9.81;
 
     fn beam(compliance: Real, damping: Real) -> BeamSpec {
-        BeamSpec { rest: 1.0, compliance, damping, yield_strain: 0.01, break_strain: 0.05 }
+        BeamSpec {
+            rest: 1.0,
+            compliance,
+            damping,
+            yield_strain: 0.01,
+            break_strain: 0.05,
+        }
     }
 
     fn run(w: &mut World, seconds: u32) {
@@ -826,7 +974,10 @@ mod tests {
     fn hanging_mass_stretches_by_weight_over_stiffness() {
         let stretch = hanging_stretch(2.0, 1e-4);
         let expected = 2.0 * G * 1e-4;
-        assert!((stretch - expected).abs() < 1e-6 * expected, "stretch {stretch}, expected {expected}");
+        assert!(
+            (stretch - expected).abs() < 1e-6 * expected,
+            "stretch {stretch}, expected {expected}"
+        );
     }
 
     /// Ten times stiffer, ten times less stretch.
@@ -848,7 +999,8 @@ mod tests {
         w.add_node(Vec3::new(0.0, 0.0, 0.0), 0.0, 0.1);
         w.add_node(Vec3::new(1.0, 0.0, 0.0), 1.0, 0.1);
         w.add_beam(0, 1, beam(1e-7, 0.0));
-        let (mut max_speed, mut min_x, mut max_y, mut worst_len) = (0.0 as Real, 1.0 as Real, Real::MIN, 0.0 as Real);
+        let (mut max_speed, mut min_x, mut max_y, mut worst_len) =
+            (0.0 as Real, 1.0 as Real, Real::MIN, 0.0 as Real);
         // A level pendulum of length 1 m has a half period of about 1.18 s.
         for _ in 0..90 {
             step(&mut w);
@@ -859,7 +1011,10 @@ mod tests {
         }
         let free_fall = (2.0 * G).sqrt();
         assert!(worst_len < 1e-3, "rod length off by {worst_len}");
-        assert!((max_speed - free_fall).abs() < 0.02 * free_fall, "bottom speed {max_speed}, free fall {free_fall}");
+        assert!(
+            (max_speed - free_fall).abs() < 0.02 * free_fall,
+            "bottom speed {max_speed}, free fall {free_fall}"
+        );
         assert!(min_x < -0.9, "did not reach the far side: {min_x}");
         assert!(max_y < 1e-6, "climbed above the start: {max_y}");
     }
@@ -883,7 +1038,9 @@ mod tests {
                 step_with_substeps(&mut w, substeps);
             }
         }
-        let ratios = (0..10usize).map(|k| (len(&w, k, k + 1) - 1.0) / ((10 - k) as Real * m * G * c)).collect();
+        let ratios = (0..10usize)
+            .map(|k| (len(&w, k, k + 1) - 1.0) / ((10 - k) as Real * m * G * c))
+            .collect();
         (w, ratios)
     }
 
@@ -898,18 +1055,29 @@ mod tests {
         let mut prev_stretch = Real::MAX;
         for k in 0..10usize {
             let stretch = len(&w, k, k + 1) - 1.0;
-            assert!(stretch > 0.0 && stretch < prev_stretch, "beam {k} stretch {stretch}");
+            assert!(
+                stretch > 0.0 && stretch < prev_stretch,
+                "beam {k} stretch {stretch}"
+            );
             assert!(r[k] >= 1.0 - 1e-9 && r[k] < 2.0, "beam {k} ratio {}", r[k]);
             prev_stretch = stretch;
         }
         for i in 1..=10usize {
             assert!(w.vel[i].length() < 1e-6, "node {i} still moving");
-            assert!(w.pos[i].x == 0.0 && w.pos[i].z == 0.0, "chain left its line");
+            assert!(
+                w.pos[i].x == 0.0 && w.pos[i].z == 0.0,
+                "chain left its line"
+            );
         }
         // Four times the substeps, well under half the excess stretch on the top beam.
         let (_, r8) = chain_stretch_ratios(8, 10);
         let (_, r32) = chain_stretch_ratios(32, 10);
-        assert!(r32[0] - 1.0 < 0.5 * (r8[0] - 1.0), "8 substeps {}, 32 substeps {}", r8[0], r32[0]);
+        assert!(
+            r32[0] - 1.0 < 0.5 * (r8[0] - 1.0),
+            "8 substeps {}, 32 substeps {}",
+            r8[0],
+            r32[0]
+        );
     }
 
     /// Stored beam force is the tension, in newtons: the top beam of a settled hanging mass
@@ -922,7 +1090,11 @@ mod tests {
         w.add_beam(0, 1, beam(1e-4, 2.0 * (3.0 / 1e-4 as Real).sqrt()));
         run(&mut w, 5);
         let weight = 3.0 * G;
-        assert!((w.last_lambda[0] - weight).abs() < 1e-6 * weight, "force {}", w.last_lambda[0]);
+        assert!(
+            (w.last_lambda[0] - weight).abs() < 1e-6 * weight,
+            "force {}",
+            w.last_lambda[0]
+        );
     }
 
     fn one_beam_island(inv_a: Real, inv_b: Real, compliance: Real) -> World {
@@ -959,10 +1131,16 @@ mod tests {
             let omega = (1.0 / compliance).sqrt();
             assert!((MIN_SUBSTEPS..=MAX_SUBSTEPS).contains(&n));
             if n < MAX_SUBSTEPS {
-                assert!(omega * STEP_SECONDS / n as Real <= SUBSTEP_C, "n {n} too small");
+                assert!(
+                    omega * STEP_SECONDS / n as Real <= SUBSTEP_C,
+                    "n {n} too small"
+                );
             }
             if n > MIN_SUBSTEPS {
-                assert!(omega * STEP_SECONDS / (n - 1) as Real > SUBSTEP_C, "n {n} not the smallest");
+                assert!(
+                    omega * STEP_SECONDS / (n - 1) as Real > SUBSTEP_C,
+                    "n {n} not the smallest"
+                );
             }
         }
         // The stiffest beam wins, and the step reports the count it used.

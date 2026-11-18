@@ -1,6 +1,6 @@
 # ribcage roadmap
 
-**TL;DR.** Overall progress: **44%**. Now: milestones 1 (solver core and tools), 2 (2D bridge builder) are complete, and so is milestone 3 (3D on terrain in Three.js): terrain, ground contact, a tower and a bridge that stand and collapse, the Three.js page with time controls, record and replay and panels skinned to the nodes (see [Plan 003](docs/plans/003_terrain_3d.md)). Milestone 4 (parts and assembly, [Plan 004](docs/plans/004_parts_and_assembly.md)) is complete: the hopper is assembled from parts, lifts off, and its hard landing snaps a leg on the craft page; the assembly panel puts it together by clicks to the same hash, and the demo is recorded. The first playable slice ends here. Milestone 5 (rigid by default, [Plan 005](docs/plans/005_rigid_by_default.md)) has started: segments, seams and the assembly tree are in the core.
+**TL;DR.** Overall progress: **47%**. Now: milestones 1 (solver core and tools), 2 (2D bridge builder) are complete, and so is milestone 3 (3D on terrain in Three.js): terrain, ground contact, a tower and a bridge that stand and collapse, the Three.js page with time controls, record and replay and panels skinned to the nodes (see [Plan 003](docs/plans/003_terrain_3d.md)). Milestone 4 (parts and assembly, [Plan 004](docs/plans/004_parts_and_assembly.md)) is complete: the hopper is assembled from parts, lifts off, and its hard landing snaps a leg on the craft page; the assembly panel puts it together by clicks to the same hash, and the demo is recorded. The first playable slice ends here. Milestone 5 (rigid by default, [Plan 005](docs/plans/005_rigid_by_default.md)) is 20% done: segments, seams, the assembly tree and rigid bodies are in the core, and hinges, limits, servos and rotors work with a stalled servo adding no energy.
 
 This page is the single answer to "what are we building, and how far along is it?". The design is the [spec](docs/research/node-beam-engine-design-spec.md). The detailed work for the current milestone lives in its plan.
 
@@ -23,12 +23,12 @@ Each milestone has a weight (its share of the whole) and a short list of checks.
 | 2 | 2D bridge builder | 8 | 100% | done |
 | 3 | 3D on terrain in Three.js | 10 | 100% | done |
 | 4 | Parts and assembly (first playable slice) | 12 | 100% | done |
-| 5 | Rigid by default | 16 | 0% | |
+| 5 | Rigid by default | 16 | 20% | in progress |
 | 6 | Aerodynamics | 10 | 0% | |
 | 7 | Ground and water | 10 | 0% | |
 | 8 | Craft-against-craft collision and threads | 12 | 0% | |
 | 9 | Visual layer | 8 | 0% | |
-| | **Overall** | **100** | **44%** | |
+| | **Overall** | **100** | **47%** | |
 
 ## Who plans and builds what
 
@@ -91,7 +91,7 @@ Planning has two stages. The costly-to-redo milestones (5 and 8) have an early d
 ### 5. Rigid by default ([Plan 005](docs/plans/005_rigid_by_default.md))
 
 - [ ] Rigid bodies with anchors carry engines, pods and wheels.
-- [ ] Hinges, joint limits, servos and rotors work, and a stalled servo adds no energy.
+- [x] Hinges, joint limits, servos and rotors work, and a stalled servo adds no energy. (Headless: `core/tests/joint.rs`; a servo stalled ten simulated minutes against a load twice its cap never gains energy, and the drive never exceeds its cap; see ER 005, phase 5.5.)
 - [ ] Segments go rigid when barely loaded and wake under load, with momentum conserved across every switch.
 - [ ] Touching rigid segments merge into one body, and a tall rocket visibly wobbles less than with everything live.
 - [ ] A craft cut in two becomes two vessels with the correct total mass.

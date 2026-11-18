@@ -128,6 +128,26 @@ pub struct World {
     pub max_angular_speed: Real,
     /// How a body's gyroscopic (spin) term is integrated; [`SpinForm::Midpoint`] by default.
     pub spin_form: SpinForm,
+    // Joints (plan 005, phase 5.5; see [`crate::joint`]). Only ever added, so an index is stable.
+    // Inputs: the six nodes `[a0, a1, ra, b0, b1, rb]` and their generations when the joint was
+    // made (a joint with a dead or reused node does nothing), the drive and limits, and the raw
+    // angle at build time. Outputs, written every step: the angle, the last substep's drive torque
+    // and the largest drive torque over the step's substeps. In the hash only once a joint exists.
+    pub joint_nodes: Vec<[u32; 6]>,
+    pub joint_gen: Vec<[u32; 6]>,
+    pub joint_mode: Vec<u32>,
+    pub joint_min: Vec<Real>,
+    pub joint_max: Vec<Real>,
+    pub joint_target: Vec<Real>,
+    pub joint_rate: Vec<Real>,
+    pub joint_cap: Vec<Real>,
+    pub joint_zero: Vec<Real>,
+    pub joint_angle: Vec<Real>,
+    pub joint_torque: Vec<Real>,
+    pub joint_peak: Vec<Real>,
+    /// Per segment: a moving joint touched it in the last step (phase 5.8 reads it). Sized and
+    /// cleared at the start of every step once a joint exists; empty before.
+    pub seg_triggered: Vec<bool>,
 }
 
 impl Default for World {
@@ -188,6 +208,19 @@ impl Default for World {
             body_prev_rot: Vec::new(),
             max_angular_speed: DEFAULT_MAX_ANGULAR_SPEED,
             spin_form: SpinForm::Midpoint,
+            joint_nodes: Vec::new(),
+            joint_gen: Vec::new(),
+            joint_mode: Vec::new(),
+            joint_min: Vec::new(),
+            joint_max: Vec::new(),
+            joint_target: Vec::new(),
+            joint_rate: Vec::new(),
+            joint_cap: Vec::new(),
+            joint_zero: Vec::new(),
+            joint_angle: Vec::new(),
+            joint_torque: Vec::new(),
+            joint_peak: Vec::new(),
+            seg_triggered: Vec::new(),
         }
     }
 }
@@ -240,7 +273,10 @@ impl World {
             self.node_segment[u] = crate::segment::NO_SEGMENT;
             self.node_body[u] = NO_BODY;
             self.node_offset[u] = Vec3::ZERO;
-            Handle { index: i, generation: self.node_gen[u] }
+            Handle {
+                index: i,
+                generation: self.node_gen[u],
+            }
         } else {
             self.pos.push(pos);
             self.vel.push(Vec3::ZERO);
@@ -252,7 +288,10 @@ impl World {
             self.node_segment.push(crate::segment::NO_SEGMENT);
             self.node_body.push(NO_BODY);
             self.node_offset.push(Vec3::ZERO);
-            Handle { index: self.node_count() - 1, generation: 0 }
+            Handle {
+                index: self.node_count() - 1,
+                generation: 0,
+            }
         }
     }
 
@@ -272,7 +311,10 @@ impl World {
 
     /// Both endpoints must be live nodes (a beam endpoint is always a node, rule 6).
     pub fn add_beam(&mut self, a: u32, b: u32, spec: BeamSpec) -> Handle {
-        assert!(a != b && self.node_alive(a) && self.node_alive(b), "beam endpoints must be distinct live nodes");
+        assert!(
+            a != b && self.node_alive(a) && self.node_alive(b),
+            "beam endpoints must be distinct live nodes"
+        );
         if let Some(Reverse(i)) = self.free_beams.pop() {
             let u = i as usize;
             self.beam_a[u] = a;
@@ -285,7 +327,10 @@ impl World {
             self.break_strain[u] = spec.break_strain;
             self.beam_flags[u] = BEAM_ALIVE;
             self.last_lambda[u] = 0.0;
-            Handle { index: i, generation: self.beam_gen[u] }
+            Handle {
+                index: i,
+                generation: self.beam_gen[u],
+            }
         } else {
             self.beam_a.push(a);
             self.beam_b.push(b);
@@ -298,12 +343,17 @@ impl World {
             self.beam_flags.push(BEAM_ALIVE);
             self.last_lambda.push(0.0);
             self.beam_gen.push(0);
-            Handle { index: self.beam_count() - 1, generation: 0 }
+            Handle {
+                index: self.beam_count() - 1,
+                generation: 0,
+            }
         }
     }
 
     pub fn node_handle_valid(&self, h: Handle) -> bool {
-        (h.index as usize) < self.pos.len() && self.node_gen[h.index as usize] == h.generation && self.node_alive(h.index)
+        (h.index as usize) < self.pos.len()
+            && self.node_gen[h.index as usize] == h.generation
+            && self.node_alive(h.index)
     }
 
     pub fn beam_handle_valid(&self, h: Handle) -> bool {
@@ -318,7 +368,9 @@ impl World {
             return;
         }
         for b in 0..self.beam_count() {
-            if self.beam_flags[b as usize] & BEAM_ALIVE != 0 && (self.beam_a[b as usize] == i || self.beam_b[b as usize] == i) {
+            if self.beam_flags[b as usize] & BEAM_ALIVE != 0
+                && (self.beam_a[b as usize] == i || self.beam_b[b as usize] == i)
+            {
                 self.delete_beam(b);
             }
         }
@@ -345,7 +397,10 @@ impl World {
     /// Adds a thruster from `tail` to `head` (distinct live nodes) with its throttle at zero, and
     /// returns its index.
     pub fn add_thruster(&mut self, tail: u32, head: u32, max_thrust: Real) -> u32 {
-        assert!(tail != head && self.node_alive(tail) && self.node_alive(head), "thruster ends must be distinct live nodes");
+        assert!(
+            tail != head && self.node_alive(tail) && self.node_alive(head),
+            "thruster ends must be distinct live nodes"
+        );
         self.thr_tail.push(tail);
         self.thr_head.push(head);
         self.thr_tail_gen.push(self.node_gen[tail as usize]);

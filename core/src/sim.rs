@@ -59,12 +59,19 @@ fn step_inner(world: &mut World, choice: Choice) -> StepStats {
     let done = world.step_count + 1;
     // Thrust goes in as ordinary external force, from the positions the step starts with.
     apply_thrust(world);
+    if world.joint_count() > 0 {
+        world.joints_begin_step();
+    }
     let mut islands = build_islands(world);
     let mut stats = StepStats::default();
     for isl in islands.iter_mut() {
         // An island holding a frozen node is not solved and reports nothing; its nodes keep
         // their position and zero velocity. Its buffer is dropped without a copy back.
-        if isl.node_world.iter().any(|&i| world.node_flags[i as usize] & NODE_FROZEN != 0) {
+        if isl
+            .node_world
+            .iter()
+            .any(|&i| world.node_flags[i as usize] & NODE_FROZEN != 0)
+        {
             isl.skipped = true;
             continue;
         }
@@ -84,7 +91,9 @@ fn step_inner(world: &mut World, choice: Choice) -> StepStats {
                 }
             }
         }
-        world.events.extend(out.events.into_iter().map(|e| Event { step: done, ..e }));
+        world
+            .events
+            .extend(out.events.into_iter().map(|e| Event { step: done, ..e }));
         stats.islands += 1;
         stats.max_substeps = stats.max_substeps.max(n);
         stats.beam_solves += n as u64 * isl.beam_a.len() as u64;
@@ -191,6 +200,13 @@ pub fn state_hash(world: &World) -> u64 {
             }
         }
     }
+    // Which segments a moving joint triggered in the last step, only once a joint exists.
+    if world.joint_count() > 0 {
+        mix(&mut h, world.seg_triggered.len() as u64);
+        for &t in &world.seg_triggered {
+            mix(&mut h, t as u64);
+        }
+    }
     h
 }
 
@@ -267,6 +283,24 @@ fn physics_hash_state(world: &World) -> u64 {
             }
         }
     }
+    // Joints (plan 005, phase 5.5), only once one exists: a world that never made one hashes as
+    // before. Inputs only, in index order; the angle and torques are outputs of these and the pose.
+    if world.joint_count() > 0 {
+        mix(&mut h, world.joint_count() as u64);
+        for j in 0..world.joint_count() as usize {
+            for k in 0..6 {
+                mix(&mut h, world.joint_nodes[j][k] as u64);
+                mix(&mut h, world.joint_gen[j][k] as u64);
+            }
+            mix(&mut h, world.joint_mode[j] as u64);
+            mix_real(&mut h, world.joint_min[j]);
+            mix_real(&mut h, world.joint_max[j]);
+            mix_real(&mut h, world.joint_target[j]);
+            mix_real(&mut h, world.joint_rate[j]);
+            mix_real(&mut h, world.joint_cap[j]);
+            mix_real(&mut h, world.joint_zero[j]);
+        }
+    }
     h
 }
 
@@ -280,7 +314,13 @@ mod tests {
         let a = w.add_node(Vec3::new(0.0, 10.0, 0.0), 0.0, 0.1);
         let b = w.add_node(Vec3::new(1.0, 10.0, 0.3), 1.0, 0.1);
         let c = w.add_node(Vec3::new(2.0, 11.0, -0.2), 0.5, 0.1);
-        let s = BeamSpec { rest: 1.0, compliance: 1e-6, damping: 0.1, yield_strain: 0.01, break_strain: 0.05 };
+        let s = BeamSpec {
+            rest: 1.0,
+            compliance: 1e-6,
+            damping: 0.1,
+            yield_strain: 0.01,
+            break_strain: 0.05,
+        };
         w.add_beam(a.index, b.index, s);
         w.add_beam(b.index, c.index, s);
         w

@@ -10,6 +10,7 @@ pub mod event;
 pub mod failure;
 pub mod ffi;
 pub mod island;
+pub mod joint;
 pub mod maths;
 pub mod real;
 pub mod segment;
@@ -40,7 +41,13 @@ mod tests {
     }
 
     fn spec() -> BeamSpec {
-        BeamSpec { rest: 1.0, compliance: 1e-6, damping: 0.1, yield_strain: 0.01, break_strain: 0.05 }
+        BeamSpec {
+            rest: 1.0,
+            compliance: 1e-6,
+            damping: 0.1,
+            yield_strain: 0.01,
+            break_strain: 0.05,
+        }
     }
 
     /// Dead slots are reused lowest-first with a new generation, and the packed island

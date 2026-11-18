@@ -236,3 +236,50 @@ Built by Opus. `cargo test`, `pnpm test` (230 pass, 1 skipped: the existing repo
 ### For 5.5
 
 5.5 (Opus) can start from the files alone. The engine and pod are bodies in every flight scenario. Joints go through `Endpoint::Riding` as beams do. `test/rigid.test.ts` shows the per-phase measurement to repeat with joints. Both hop goldens must keep replaying.
+
+## 2026-11-18 (phase 5.5: hinges, limits, servos and rotors)
+
+Built by Opus. `cargo test` (134 pass, 4 ignored), `pnpm test` (230 pass, 1 skipped) and `pnpm typecheck` pass. weak-bridge, tower-collapse, hard-landing and hard-landing-rigid replay to their hashes; the all-live hop still ends at `0xd92f2aad01c0e048` and the rigid hop at `0x5a1c383b76d89ea6`, both at step 1320. ABI 7 (two command kinds and four readers); ABI 6 recordings still read.
+
+### Formulas as built
+
+- **[decision]** **A joint is six endpoints through the one kernel:** `a0, a1, ra` on side A (the frame) and `b0, b1, rb` on side B (the moving part). Each is a node, a pinned node or a rider, so body–body, body–live and live–live are one code path. The hinge is two zero-length `solve_distance` constraints, `a0–b0` and `a1–b1`, with no compliance.
+- **[decision]** **The angle** is B's turn about `u = (a1 − a0)/|a1 − a0|`: each reference is projected off the axis (`pA`, `pB`), `raw = atan2(u · (pA × pB), pA · pB)` and `φ = wrap(raw − zero)`, with `zero` measured when the joint is added. The core gains its own `atan2` (an odd series on `[0, tan(π/8)]` after two range halvings; at most about 9e-16 from the library over the test sweep). A reference on the axis line has no angle, so `add_joint` rejects it.
+- **[decision]** **The drive and the limit are a couple, not a rotation.** A correction `Δλ` pushes `rb` along `+t_B` and `b0` along `−t_B` by `Δλ / L_B`, and `ra` along `−t_A` and `a0` along `+t_A` by `Δλ / L_A` (`t` the tangent at each reference, `L` its lever), with `Δλ = −C / (w_A/L_A² + w_B/L_B²)`. Equal and opposite pairs keep linear momentum: the free falling pair keeps it to 3.8e-15 of the fall's. Rotating a body side about the hinge line instead was rejected: it breaks momentum for a free pair.
+- **[decision]** **Servo:** the aim is `φ0 + clamp(wrap(target − φ0), ±rate · h)`, with `φ0` the angle at the substep's start. **Rotor:** the aim is `φ0 + speed · h`. The drive's `Δλ` summed over the substep is clamped to `±cap · h²`, so its torque (`Σ Δλ / h²`) never exceeds the cap. The aim is relative to `φ0`, so a stalled servo never stores a growing error to release later.
+- **[decision]** **Limit:** a hard, uncapped correction toward `min` or `max`, only when `φ` is past it. Limits sit in `−π ≤ min ≤ 0 ≤ max ≤ π`, the angle at add time being 0.
+- **[decision]** **`JOINT_PASSES = 8` local passes per substep** over [hinge points, drive, limit]. One pass leaves a body side short: the couple turns a body about its centre, which moves its axis nodes, and the hinge points pull part of the turn back. Measured over 4, 8 and 16 passes:
+
+  | Passes | Door hinge gap (m) | Limit overshoot (rad) | Body servo lag (rad) | Rotor speed error (rad/s) |
+  |---|---|---|---|---|
+  | 1 | 1.2e-4 | 1.6e-4 | 1.1e-1 | 1.2e-2 |
+  | 4 | 5.3e-7 | 2.5e-5 | 2.0e-2 | 2.0e-3 |
+  | 8 | 3.7e-9 | 7.9e-6 | 8.7e-3 | 5.5e-4 |
+  | 16 | 9.5e-13 | 1.8e-6 | 3.7e-3 | 8.2e-5 |
+
+  Eight passes meet every bound at a small cost (joints are few; each pass is two point constraints and two angle measures). Lattice sides converge in one pass; the cost is only for body sides.
+- **[decision]** **Hash:** with one joint or more, `physics_hash_state` adds the count, then per joint its six nodes and generations, mode, min, max, target, rate, cap and zero; `state_hash` adds the per-segment triggered flags. With no joint neither changes, which is why every golden still replays.
+- **[decision]** **Triggered:** a joint whose angle moved more than `JOINT_MOVE_EPS = 1e-4` rad in a step marks the segments of `a0` and `b0` (`seg_triggered`, cleared each step, read by 5.8).
+- **[decision]** **Commands:** `CMD_ADD_JOINT` (`a = a0`, `b = b0`, `f0..f3 = a1, b1, ra, rb` as whole node numbers, `f4, f5 = min, max`; result: the joint's id) and `CMD_SET_JOINT_TARGET` (`a = joint`, `b = mode`, `f0..f2 = target, rate, cap`). Rejected: dead, repeated or out-of-range nodes, all six on one body, limits outside their ranges, a reference on the axis, unknown joints or modes, non-finite values, a negative rate or cap, a servo target past ±π.
+
+### Measured
+
+- **[finding]** **Door** (one body, 2 m vertical hinge, pushed for 1 s at its far corner along every axis, then free for 4 s; it turns to 3.14 rad): worst hinge gap 3.7e-9 m, worst drift of any door node along the axis 2.3e-9 m. The stated bound is 1e-6 m for both.
+- **[finding]** **Limit:** held at 0.3000079 rad under twice gravity's torque (bound 2e-5); one second after the push reverses, at −1.40 rad.
+- **[finding]** **Servo** (body arm to 1 rad at 0.5 rad/s, cap 200 N·m): never ahead of `0.5 t`, behind it by at most 8.7e-3 rad (under 2% of the rate); held within 2.9e-5 of 1 rad from 2.5 s. A live arm: tracking 5.0e-4, hold 6e-16.
+- **[finding]** **Stall** (arm of 8.30 kg asked for π/2 with a cap of half `M g d`, 23.84 N·m, for 10 minutes): it rests at 0.52364 rad (gravity meets the cap at asin 0.5 = 0.52360) and never rises above 0.550. `E = KE + PE − τ_cap · φ` over minutes 1 to 10 moves within [−1.4e-2, +0.0] J of its value at one minute: it only loses energy. KE + PE moves by 1.2 J over the same window, as the arm settles.
+- **[finding]** **Peak drive torque against the cap:** 1.000000000 of the cap at most in every test (servo, stall, rotor, the four pairs), within the 1e-12 rounding slack.
+- **[finding]** **Rotor** (wheel, I = 4.025 kg·m², 2 rad/s, cap 5 N·m): within 5.5e-4 rad/s of 2 under a 3 N·m brake; under 8 N·m it slows at 0.7453 rad/s² against `(8 − 5)/I = 0.7454`.
+- **[finding]** **Pairs** (two boxes hinged on a shared edge, falling, servo to 0.5 rad at 1 rad/s): at 0.25 s the angle is 0.2402 (body–body), 0.2385 (body–live and live–body) and 0.2386 (live–live); worst hold error from 1 s is 3e-14, 3.7e-4, 2.4e-3 and 1.3e-3 rad. The live lattices have undamped stiff beams, so they ring a little under the drive; the bound is 5e-3.
+
+### Not checked
+
+- **[assumption]** Timing with joints is not measured: no flight scenario has a joint yet (5.6's wheel is the first). With no joint the solver's joint loops are empty and nothing else runs.
+- **[assumption]** One hinge per joint pair of sides; chains of joints on one body (a leg with knee and hip) are not tested. Each joint is solved in its island in add order, so a chain converges like any Gauss-Seidel chain.
+- **[assumption]** A body side lags its servo rate by up to 2% (5% in the free pair at 0.25 s), from the passes not fully converging. It does not accumulate past the target, and the hold converges.
+- **[oracle-candidate]** Is there a cheap effective mass for a body side of a joint (the inertia about the hinge line rather than the centre) that makes one pass converge, while still keeping momentum for a free pair?
+- **[assumption]** Not run in the browser; the TypeScript side is covered by `pnpm typecheck` and the replays only.
+
+### For 5.6
+
+5.6 (Sonnet) can start from the files alone. Add the wheel with `Commands.addJoint` (or `World::add_joint`) between the chassis body and the wheel body, then `setJointTarget(joint, JOINT_ROTOR, speed, 0, cap)`; `World.joints()` reads each joint's angle, torque and per-step peak. `core/tests/joint.rs` has the `wheel` and `brake` helpers to copy.

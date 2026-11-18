@@ -2,7 +2,7 @@
 //! the core itself never calls it. Also the determinism lint: no file in `core/src` other than
 //! `maths.rs` may call a library maths function.
 
-use beam_core::maths::{cos, sin, sin_cos, PI, TAU};
+use beam_core::maths::{atan2, cos, sin, sin_cos, PI, TAU};
 use beam_core::real::Real;
 use std::fs;
 use std::path::Path;
@@ -47,7 +47,12 @@ fn reduction_keeps_small_results_near_multiples_of_half_pi() {
         // Whichever of the two is near zero must agree with the library to a few percent of
         // itself; the library reduces with more bits than ours, but both are below 1e-15.
         let tiny = if k % 2 == 0 { (s, rs) } else { (c, rc) };
-        assert!((tiny.0 - tiny.1).abs() < 3e-16, "k {k}: {} vs {}", tiny.0, tiny.1);
+        assert!(
+            (tiny.0 - tiny.1).abs() < 3e-16,
+            "k {k}: {} vs {}",
+            tiny.0,
+            tiny.1
+        );
     }
 }
 
@@ -95,7 +100,14 @@ fn sin_cos_is_bit_identical_to_the_two_calls() {
 /// Outside the domain the answer is NaN, so the bad-number freeze catches a runaway angle.
 #[test]
 fn out_of_domain_is_nan() {
-    for x in [Real::NAN, Real::INFINITY, Real::NEG_INFINITY, 1.0e6 + 1.0, -1.0e7, 1.0e300] {
+    for x in [
+        Real::NAN,
+        Real::INFINITY,
+        Real::NEG_INFINITY,
+        1.0e6 + 1.0,
+        -1.0e7,
+        1.0e300,
+    ] {
         assert!(sin(x).is_nan() && cos(x).is_nan(), "{x}");
         let (s, c) = sin_cos(x);
         assert!(s.is_nan() && c.is_nan(), "{x}");
@@ -131,9 +143,37 @@ const GOLDEN: u64 = 0x5a4c_08f0_a35e_d69a;
 #[test]
 fn no_library_maths_in_core_source() {
     let forbidden = [
-        ".sin(", ".cos(", ".tan(", ".asin(", ".acos(", ".atan(", ".atan2(", ".sinh(", ".cosh(", ".tanh(", ".sin_cos(", ".exp(",
-        ".exp2(", ".exp_m1(", ".ln(", ".ln_1p(", ".log(", ".log2(", ".log10(", ".powf(", ".powi(", ".cbrt(", ".hypot(", ".mul_add(",
-        "f64::sin", "f64::cos", "f64::powf", "f64::exp", "f32::sin", "f32::cos", "libm::",
+        ".sin(",
+        ".cos(",
+        ".tan(",
+        ".asin(",
+        ".acos(",
+        ".atan(",
+        ".atan2(",
+        ".sinh(",
+        ".cosh(",
+        ".tanh(",
+        ".sin_cos(",
+        ".exp(",
+        ".exp2(",
+        ".exp_m1(",
+        ".ln(",
+        ".ln_1p(",
+        ".log(",
+        ".log2(",
+        ".log10(",
+        ".powf(",
+        ".powi(",
+        ".cbrt(",
+        ".hypot(",
+        ".mul_add(",
+        "f64::sin",
+        "f64::cos",
+        "f64::powf",
+        "f64::exp",
+        "f32::sin",
+        "f32::cos",
+        "libm::",
     ];
     let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
     let mut checked = 0;
@@ -148,7 +188,12 @@ fn no_library_maths_in_core_source() {
                 continue;
             }
             for f in forbidden {
-                assert!(!line.contains(f), "{}:{}: library maths call `{f}` (use beam_core::maths)", path.display(), n + 1);
+                assert!(
+                    !line.contains(f),
+                    "{}:{}: library maths call `{f}` (use beam_core::maths)",
+                    path.display(),
+                    n + 1
+                );
             }
         }
         checked += 1;
@@ -161,11 +206,35 @@ fn no_library_maths_in_core_source() {
 #[ignore = "measurement, prints only"]
 fn measure_worst_error() {
     for (name, g) in [
-        ("[-1000, 1000]", grid(2_000_000, -1000.0, 0.001_000_123_456_789)),
+        (
+            "[-1000, 1000]",
+            grid(2_000_000, -1000.0, 0.001_000_123_456_789),
+        ),
         ("[-0.8, 0.8]", grid(2_000_000, -0.8, 0.000_000_8)),
         ("[-1e6, 1e6]", grid(2_000_000, -1.0e6, 1.000_000_3)),
     ] {
         let (s, c) = worst(g);
         println!("{name}: worst abs error sin {s:.3e}, cos {c:.3e}");
     }
+}
+
+/// Own `atan2` (phase 5.5, joint angles) against the library, all round the circle and at the
+/// axes, with the angle the result of our own sine and cosine read back.
+#[test]
+fn atan2_matches_the_library() {
+    let mut worst: Real = 0.0;
+    for x in grid(200_000, -PI, 0.000_031_415_9) {
+        let (s, c) = sin_cos(x);
+        for r in [1e-3, 1.0, 7.5e3] {
+            let (y, xx) = (s * r, c * r);
+            worst = worst.max((atan2(y, xx) - y.atan2(xx)).abs());
+        }
+    }
+    assert!(worst < 1e-15, "worst {worst:e}"); // measured 8.9e-16, two ulps near ±π
+    assert_eq!(atan2(0.0, 1.0), 0.0);
+    assert_eq!(atan2(0.0, -1.0), PI);
+    assert_eq!(atan2(0.0, 0.0), 0.0);
+    assert!((atan2(1.0, 0.0) - PI / 2.0).abs() < 2.3e-16);
+    assert!((atan2(-1.0, 0.0) + PI / 2.0).abs() < 2.3e-16);
+    assert!(atan2(Real::NAN, 1.0).is_nan());
 }

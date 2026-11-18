@@ -5,6 +5,7 @@
 //! live nodes it touches, with its riders and its own pose (phase 5.3).
 
 use crate::body::{SpinForm, NO_BODY};
+use crate::joint::JointSpec;
 use crate::maths::{Quat, Sym3};
 use crate::real::{Real, Vec3};
 use crate::world::{World, NODE_ALIVE};
@@ -74,6 +75,16 @@ pub struct Island {
     /// The world's spin integrator and angular speed limit, for the bodies' prediction.
     pub spin_form: SpinForm,
     pub max_angular_speed: Real,
+    // Per packed joint (phase 5.5), ascending world index. Ends are packed node positions in the
+    // order `[a0, a1, ra, b0, b1, rb]`. The solve writes the angle at the step's end, the last
+    // substep's drive torque, the step's peak drive torque and whether the angle moved.
+    pub joint_world: Vec<u32>,
+    pub joint_ends: Vec<[u32; 6]>,
+    pub joint_spec: Vec<JointSpec>,
+    pub joint_angle: Vec<Real>,
+    pub joint_torque: Vec<Real>,
+    pub joint_peak: Vec<Real>,
+    pub joint_moved: Vec<bool>,
 }
 
 impl Island {
@@ -99,15 +110,22 @@ impl Island {
 /// - Live beams whose two ends are both pinned belong to no component. If there are any they
 ///   form one extra island after all the others (`root` is `u32::MAX`, no movable node).
 ///
+/// - A live joint (phase 5.5) joins all its movable nodes, as a beam does; its pinned nodes are
+///   copied in. A joint with no movable node, or with all six nodes on one body, is not packed.
+///
 /// Union-find with the smaller index as root, so the root is the lowest joining index of the
 /// component and no hashing or iteration order enters. Rebuilt every step.
 pub fn build_islands(world: &World) -> Vec<Island> {
     let n = world.node_count() as usize;
     // A node riding a rigid body joins as a movable node does; the solve moves it through its
     // body. Two ends on one body: a beam inside the body, never packed.
-    let movable =
-        |i: usize| world.node_flags[i] & NODE_ALIVE != 0 && (world.node_body[i] != NO_BODY || world.inv_mass[i] != 0.0);
-    let inside = |a: usize, c: usize| world.node_body[a] != NO_BODY && world.node_body[a] == world.node_body[c];
+    let movable = |i: usize| {
+        world.node_flags[i] & NODE_ALIVE != 0
+            && (world.node_body[i] != NO_BODY || world.inv_mass[i] != 0.0)
+    };
+    let inside = |a: usize, c: usize| {
+        world.node_body[a] != NO_BODY && world.node_body[a] == world.node_body[c]
+    };
     let mut parent: Vec<u32> = (0..n as u32).collect();
     fn find(parent: &mut [u32], mut x: u32) -> u32 {
         while parent[x as usize] != x {
@@ -139,9 +157,30 @@ pub fn build_islands(world: &World) -> Vec<Island> {
         if !world.beam_alive(b) {
             continue;
         }
-        let (a, c) = (world.beam_a[b as usize] as usize, world.beam_b[b as usize] as usize);
+        let (a, c) = (
+            world.beam_a[b as usize] as usize,
+            world.beam_b[b as usize] as usize,
+        );
         if movable(a) && movable(c) && !inside(a, c) {
             union(&mut parent, a as u32, c as u32);
+        }
+    }
+    // Joints, ascending: which take part, and their movable nodes in one island.
+    let joint_on = |j: usize| {
+        let ns = world.joint_nodes[j];
+        world.joint_nodes_live(j)
+            && ns.iter().any(|&i| movable(i as usize))
+            && !ns.iter().all(|&i| inside(ns[0] as usize, i as usize))
+    };
+    for j in 0..world.joint_count() as usize {
+        if joint_on(j) {
+            let ns = world.joint_nodes[j];
+            let first = *ns.iter().find(|&&i| movable(i as usize)).unwrap();
+            for &i in &ns {
+                if movable(i as usize) {
+                    union(&mut parent, first, i);
+                }
+            }
         }
     }
     // Island ids in ascending root order; roots are visited in ascending index.
@@ -196,19 +235,44 @@ pub fn build_islands(world: &World) -> Vec<Island> {
             }
         }
     }
+    let mut joints: Vec<Vec<u32>> = vec![Vec::new(); count as usize];
+    for j in 0..world.joint_count() as usize {
+        if joint_on(j) {
+            let ns = world.joint_nodes[j];
+            let first = *ns.iter().find(|&&i| movable(i as usize)).unwrap();
+            let id = island_of_root[find(&mut parent, first) as usize] as usize;
+            joints[id].push(j as u32);
+            for &i in &ns {
+                if !movable(i as usize) {
+                    nodes[id].push(i);
+                }
+            }
+        }
+    }
     let mut packed = vec![u32::MAX; n];
     let mut islands = Vec::with_capacity(count as usize + 1);
     for (id, (ns, bs)) in nodes.iter_mut().zip(beams.iter()).enumerate() {
         ns.sort_unstable();
         ns.dedup();
-        let root = *ns.iter().find(|&&i| movable(i as usize)).expect("island has a movable node");
+        let root = *ns
+            .iter()
+            .find(|&&i| movable(i as usize))
+            .expect("island has a movable node");
         debug_assert_eq!(island_of_root[root as usize] as usize, id);
-        islands.push(pack(world, ns, bs, &mut packed, root));
+        let mut isl = pack(world, ns, bs, &mut packed, root);
+        pack_joints(world, &mut isl, &joints[id], &packed);
+        islands.push(isl);
     }
     if !fixed_beams.is_empty() {
         fixed_nodes.sort_unstable();
         fixed_nodes.dedup();
-        islands.push(pack(world, &fixed_nodes, &fixed_beams, &mut packed, u32::MAX));
+        islands.push(pack(
+            world,
+            &fixed_nodes,
+            &fixed_beams,
+            &mut packed,
+            u32::MAX,
+        ));
     }
     islands
 }
@@ -222,7 +286,11 @@ fn pack(world: &World, nodes: &[u32], beams: &[u32], packed: &mut [u32], root: u
         max_angular_speed: world.max_angular_speed,
         ..Island::default()
     };
-    let mut slots: Vec<u32> = nodes.iter().map(|&i| world.node_body[i as usize]).filter(|&s| s != NO_BODY).collect();
+    let mut slots: Vec<u32> = nodes
+        .iter()
+        .map(|&i| world.node_body[i as usize])
+        .filter(|&s| s != NO_BODY)
+        .collect();
     slots.sort_unstable();
     slots.dedup();
     for &s in &slots {
@@ -262,7 +330,8 @@ fn pack(world: &World, nodes: &[u32], beams: &[u32], packed: &mut [u32], root: u
             island.node_body.push(b as u32);
             island.offset.push(world.node_offset[u]);
             island.body_force[b] = island.body_force[b] + f;
-            island.body_torque[b] = island.body_torque[b] + (world.pos[u] - island.body_centre[b]).cross(f);
+            island.body_torque[b] =
+                island.body_torque[b] + (world.pos[u] - island.body_centre[b]).cross(f);
         }
     }
     for &b in beams {
@@ -280,6 +349,22 @@ fn pack(world: &World, nodes: &[u32], beams: &[u32], packed: &mut [u32], root: u
         island.last_lambda.push(world.last_lambda[u]);
     }
     island
+}
+
+/// Adds the listed joints (ascending) to a packed island, after its nodes.
+fn pack_joints(world: &World, island: &mut Island, joints: &[u32], packed: &[u32]) {
+    for &j in joints {
+        let u = j as usize;
+        island.joint_world.push(j);
+        island
+            .joint_ends
+            .push(world.joint_nodes[u].map(|i| packed[i as usize]));
+        island.joint_spec.push(world.joint_spec(u));
+        island.joint_angle.push(world.joint_angle[u]);
+        island.joint_torque.push(0.0);
+        island.joint_peak.push(0.0);
+        island.joint_moved.push(false);
+    }
 }
 
 /// Copies solved state back to the world arrays.
@@ -301,5 +386,14 @@ pub fn copy_back(world: &mut World, island: &Island) {
         world.body_omega[s] = island.body_omega[p];
         world.body_prev_centre[s] = island.body_pred_centre[p];
         world.body_prev_rot[s] = island.body_pred_rot[p];
+    }
+    for (p, &j) in island.joint_world.iter().enumerate() {
+        let j = j as usize;
+        world.joint_angle[j] = island.joint_angle[p];
+        world.joint_torque[j] = island.joint_torque[p];
+        world.joint_peak[j] = island.joint_peak[p];
+        if island.joint_moved[p] {
+            world.joint_moved(j);
+        }
     }
 }

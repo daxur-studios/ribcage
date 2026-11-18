@@ -64,6 +64,20 @@ pub const CMD_MAKE_RIGID: u32 = 13;
 pub const CMD_RELEASE_RIGID: u32 = 14;
 
 /// Result slot value for a rejected record.
+/// Adds a joint (plan 005, phase 5.5; see [`crate::joint`]): `a` = side A's first axis node,
+/// `b` = side B's first axis node; `f[0]` = A's second axis node, `f[1]` = B's second axis node,
+/// `f[2]` = A's reference node, `f[3]` = B's reference node, each a whole number from 0 to
+/// `u32::MAX` written as a float; `f[4]` = lower limit, `f[5]` = upper limit, radians from the
+/// current pose, `−π ≤ min ≤ 0 ≤ max ≤ π` (`−π` and `π` for no limit). Rejected, and nothing
+/// changed, when a node is not live, two of the six are the same node, all six ride one body, a
+/// limit is out of range, or the axis or a reference arm has no length now. The drive starts
+/// free. Result: the joint's index (numbered in the order added).
+pub const CMD_ADD_JOINT: u32 = 15;
+/// Sets a joint's drive: `a` = joint, `b` = mode (0 free, 1 servo, 2 rotor); `f[0]` = target (a
+/// servo's angle in `[−π, π]` from the build pose, a rotor's speed in rad/s), `f[1]` = a servo's
+/// rate in rad/s, finite and zero or more, `f[2]` = torque cap in newton-metres, finite and zero or
+/// more. Result: 1.
+pub const CMD_SET_JOINT_TARGET: u32 = 16;
 pub const REJECTED: u32 = u32::MAX;
 
 /// One command record. `repr(C)`; the TypeScript host writes it field by field (`src/commands.ts`).
@@ -110,7 +124,8 @@ fn apply_one(w: &mut World, c: &Command) -> u32 {
             if !finite(&c.f[0..5]) || c.f[3] < 0.0 || c.f[4] < 0.0 {
                 return REJECTED;
             }
-            w.add_node(Vec3::new(c.f[0], c.f[1], c.f[2]), c.f[3], c.f[4]).index
+            w.add_node(Vec3::new(c.f[0], c.f[1], c.f[2]), c.f[3], c.f[4])
+                .index
         }
         CMD_ADD_BEAM => {
             let [rest, compliance, damping, yield_strain, break_strain, _] = c.f;
@@ -126,7 +141,18 @@ fn apply_one(w: &mut World, c: &Command) -> u32 {
             {
                 return REJECTED;
             }
-            w.add_beam(c.a, c.b, BeamSpec { rest, compliance, damping, yield_strain, break_strain }).index
+            w.add_beam(
+                c.a,
+                c.b,
+                BeamSpec {
+                    rest,
+                    compliance,
+                    damping,
+                    yield_strain,
+                    break_strain,
+                },
+            )
+            .index
         }
         CMD_DELETE_NODE => {
             if !node_ok(w, c.a) {
@@ -171,14 +197,22 @@ fn apply_one(w: &mut World, c: &Command) -> u32 {
             };
             let count = c.b as usize;
             let start = c.a as usize;
-            if !(1..=6).contains(&count) || start + count > t.height_count() || !finite(&c.f[0..count]) {
+            if !(1..=6).contains(&count)
+                || start + count > t.height_count()
+                || !finite(&c.f[0..count])
+            {
                 return REJECTED;
             }
             t.heights[start..start + count].copy_from_slice(&c.f[0..count]);
             1
         }
         CMD_ADD_THRUSTER => {
-            if !node_ok(w, c.a) || !node_ok(w, c.b) || c.a == c.b || !c.f[0].is_finite() || c.f[0] < 0.0 {
+            if !node_ok(w, c.a)
+                || !node_ok(w, c.b)
+                || c.a == c.b
+                || !c.f[0].is_finite()
+                || c.f[0] < 0.0
+            {
                 return REJECTED;
             }
             w.add_thruster(c.a, c.b, c.f[0])
@@ -202,11 +236,37 @@ fn apply_one(w: &mut World, c: &Command) -> u32 {
             }
         }
         CMD_MAKE_RIGID => {
-            let made = if c.b == u32::MAX { w.make_rigid(&[c.a]) } else { w.make_rigid(&[c.a, c.b]) };
+            let made = if c.b == u32::MAX {
+                w.make_rigid(&[c.a])
+            } else {
+                w.make_rigid(&[c.a, c.b])
+            };
             made.unwrap_or(REJECTED)
         }
         CMD_RELEASE_RIGID => {
             if w.segment_body(c.a) != crate::body::NO_BODY && w.release(&[c.a]) {
+                1
+            } else {
+                REJECTED
+            }
+        }
+        CMD_ADD_JOINT => {
+            let whole = |x: Real| x >= 0.0 && x < 4_294_967_296.0 && x == (x as u32) as Real;
+            if !(whole(c.f[0]) && whole(c.f[1]) && whole(c.f[2]) && whole(c.f[3])) {
+                return REJECTED;
+            }
+            let nodes = [
+                c.a,
+                c.f[0] as u32,
+                c.f[2] as u32,
+                c.b,
+                c.f[1] as u32,
+                c.f[3] as u32,
+            ];
+            w.add_joint(nodes, c.f[4], c.f[5]).unwrap_or(REJECTED)
+        }
+        CMD_SET_JOINT_TARGET => {
+            if w.set_joint_target(c.a, c.b, c.f[0], c.f[1], c.f[2]) {
                 1
             } else {
                 REJECTED

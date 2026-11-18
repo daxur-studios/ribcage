@@ -6,7 +6,7 @@
  * in the page.
  */
 
-import type { ApplyResult, BeamView, BodyView, CoreEvent, HostPtr, SegmentProps, SegmentView } from './core.ts';
+import type { ApplyResult, BeamView, BodyView, CoreEvent, HostPtr, JointView, SegmentProps, SegmentView } from './core.ts';
 import { Core } from './core.ts';
 import type { CommandBatch } from './commands.ts';
 
@@ -63,6 +63,11 @@ export class World {
   /** Rigid bodies (plan 005, phase 5.2), as copies. */
   bodies(): BodyView {
     return this.#core.bodies(this.#h);
+  }
+
+  /** Joint angles and drive torques after the last step (plan 005, phase 5.5). */
+  joints(): JointView {
+    return this.#core.joints(this.#h);
   }
 
   /** One segment's mass, centre and inertia from the current positions, or `null`. */

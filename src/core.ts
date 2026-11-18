@@ -10,7 +10,7 @@
 import { COMMAND_BYTES, type CommandBatch } from './commands.ts';
 
 /** The ABI version this loader was written for (`ABI_VERSION` in core/src/ffi.rs). */
-export const ABI_VERSION = 6;
+export const ABI_VERSION = 7;
 
 /** A host pointer inside the core (an integer to JavaScript). */
 export type HostPtr = number;
@@ -73,6 +73,10 @@ interface Exports {
   rc_body_mass_ptr(h: number): number;
   rc_node_body_ptr(h: number): number;
   rc_segment_body_ptr(h: number): number;
+  rc_joint_count(h: number): number;
+  rc_joint_angle_ptr(h: number): number;
+  rc_joint_torque_ptr(h: number): number;
+  rc_joint_peak_ptr(h: number): number;
 }
 
 /** Segments, seams and each node's segment, as copies (plan 005, phase 5.1). */
@@ -107,6 +111,16 @@ export interface BodyView {
   /** Body per node slot and per segment (`NO_BODY` for none). */
   nodeBody: Uint32Array;
   segmentBody: Uint32Array;
+}
+
+/** Joint outputs after the last step, one number per joint, as copies (plan 005, phase 5.5). */
+export interface JointView {
+  /** Angle about the hinge axis, radians from the pose the joint was added in, in (-pi, pi]. */
+  angle: Float64Array;
+  /** Drive torque in the last substep, newton-metres (zero for a free joint). */
+  torque: Float64Array;
+  /** Largest drive torque magnitude over the step's substeps; never above the cap. */
+  peak: Float64Array;
 }
 
 /** A segment's mass, centre and inertia from the current positions (`segment::SegmentProps`). */
@@ -344,6 +358,18 @@ export class Core {
       mass: new Float64Array(mem, x.rc_body_mass_ptr(h), slots).slice(),
       nodeBody: new Uint32Array(mem, x.rc_node_body_ptr(h), x.rc_node_count(h)).slice(),
       segmentBody: new Uint32Array(mem, x.rc_segment_body_ptr(h), x.rc_segment_count(h)).slice(),
+    };
+  }
+
+  /** Joint angles and drive torques after the last step, as copies. */
+  joints(h: HostPtr): JointView {
+    const x = this.#x;
+    const n = x.rc_joint_count(h);
+    const mem = x.memory.buffer;
+    return {
+      angle: new Float64Array(mem, x.rc_joint_angle_ptr(h), n).slice(),
+      torque: new Float64Array(mem, x.rc_joint_torque_ptr(h), n).slice(),
+      peak: new Float64Array(mem, x.rc_joint_peak_ptr(h), n).slice(),
     };
   }
 

@@ -30,10 +30,11 @@ use crate::world::{BeamSpec, World};
 /// (kinds 9 and 10) and puts thrusters in the state hash (only when there are any). 5 added the
 /// segment commands (kinds 11 and 12), the segment readers and `rc_physics_hash`, and puts segments
 /// in the state hash (only once a segment exists). 6 added the rigid-body commands (kinds 13 and
-/// 14) and the body readers, and puts bodies in both hashes (only while a body is alive). Nothing
-/// else changed, so a recording made at ABI 2, 3, 4 or 5 still means the same thing and replays
-/// (`src/recording.ts`).
-pub const ABI_VERSION: u32 = 6;
+/// 14) and the body readers, and puts bodies in both hashes (only while a body is alive). 7 added
+/// the joint commands (kinds 15 and 16) and the joint readers, and puts joints in both hashes (only
+/// once a joint exists). Nothing else changed, so a recording made at ABI 2, 3, 4, 5 or 6 still
+/// means the same thing and replays (`src/recording.ts`).
+pub const ABI_VERSION: u32 = 7;
 
 /// Bytes per command record, for the host to check against its own layout.
 #[no_mangle]
@@ -92,7 +93,11 @@ pub extern "C" fn rc_host_new() -> *mut Host {
 /// test scene), stepped with [`rc_bench_step`].
 #[no_mangle]
 pub extern "C" fn rc_bench_new(standard: u32) -> *mut Host {
-    let spec = if standard != 0 { BenchSpec::STANDARD } else { BenchSpec::SMALL };
+    let spec = if standard != 0 {
+        BenchSpec::STANDARD
+    } else {
+        BenchSpec::SMALL
+    };
     let (world, load_nodes) = bench_scene(spec).into_parts();
     Box::into_raw(Box::new(Host::with(world, load_nodes)))
 }
@@ -111,8 +116,17 @@ pub unsafe extern "C" fn rc_host_free(h: *mut Host) {
 /// # Safety
 /// `h` is a live host pointer.
 #[no_mangle]
-pub unsafe extern "C" fn rc_add_node(h: *mut Host, x: Real, y: Real, z: Real, inv_mass: Real, radius: Real) -> u32 {
-    (*h).world.add_node(Vec3::new(x, y, z), inv_mass, radius).index
+pub unsafe extern "C" fn rc_add_node(
+    h: *mut Host,
+    x: Real,
+    y: Real,
+    z: Real,
+    inv_mass: Real,
+    radius: Real,
+) -> u32 {
+    (*h).world
+        .add_node(Vec3::new(x, y, z), inv_mass, radius)
+        .index
 }
 
 /// Adds a beam between two live, different nodes and returns its index.
@@ -130,7 +144,13 @@ pub unsafe extern "C" fn rc_add_beam(
     yield_strain: Real,
     break_strain: Real,
 ) -> u32 {
-    let spec = BeamSpec { rest, compliance, damping, yield_strain, break_strain };
+    let spec = BeamSpec {
+        rest,
+        compliance,
+        damping,
+        yield_strain,
+        break_strain,
+    };
     (*h).world.add_beam(a, b, spec).index
 }
 
@@ -309,7 +329,11 @@ pub unsafe extern "C" fn rc_write_beams(h: *mut Host) -> *const u32 {
         let ratio = if live {
             let len = (w.pos[w.beam_b[k] as usize] - w.pos[w.beam_a[k] as usize]).length();
             let total = (len - w.rest0[k]) / w.rest0[k];
-            let unit = if w.yield_strain[k] > 0.0 { w.yield_strain[k] } else { w.break_strain[k] };
+            let unit = if w.yield_strain[k] > 0.0 {
+                w.yield_strain[k]
+            } else {
+                w.break_strain[k]
+            };
             total / unit
         } else {
             0.0
@@ -509,6 +533,42 @@ pub unsafe extern "C" fn rc_body_mass_ptr(h: *const Host) -> *const Real {
     (*h).world.body_mass.as_ptr()
 }
 
+/// Number of joints (never removed, so an index is stable).
+///
+/// # Safety
+/// `h` is a live host pointer.
+#[no_mangle]
+pub unsafe extern "C" fn rc_joint_count(h: *const Host) -> u32 {
+    (*h).world.joint_count()
+}
+
+/// Each joint's angle at the end of the last step, radians from its build pose, one `Real`.
+///
+/// # Safety
+/// `h` is a live host pointer.
+#[no_mangle]
+pub unsafe extern "C" fn rc_joint_angle_ptr(h: *const Host) -> *const Real {
+    (*h).world.joint_angle.as_ptr()
+}
+
+/// Each joint's drive torque in the last substep of the last step, newton-metres, one `Real`.
+///
+/// # Safety
+/// `h` is a live host pointer.
+#[no_mangle]
+pub unsafe extern "C" fn rc_joint_torque_ptr(h: *const Host) -> *const Real {
+    (*h).world.joint_torque.as_ptr()
+}
+
+/// Each joint's largest drive torque magnitude over the last step's substeps, one `Real`.
+///
+/// # Safety
+/// `h` is a live host pointer.
+#[no_mangle]
+pub unsafe extern "C" fn rc_joint_peak_ptr(h: *const Host) -> *const Real {
+    (*h).world.joint_peak.as_ptr()
+}
+
 /// Each node slot's body, one `u32` (`u32::MAX` for a loose node).
 ///
 /// # Safety
@@ -541,7 +601,8 @@ pub unsafe extern "C" fn rc_segment_props(h: *mut Host, segment: u32) -> *const 
         None => std::ptr::null(),
         Some(p) => {
             host.segment_props.clear();
-            host.segment_props.extend_from_slice(&[p.mass, p.centre.x, p.centre.y, p.centre.z]);
+            host.segment_props
+                .extend_from_slice(&[p.mass, p.centre.x, p.centre.y, p.centre.z]);
             host.segment_props.extend_from_slice(&p.inertia);
             host.segment_props.as_ptr()
         }

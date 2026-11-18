@@ -23,6 +23,14 @@ export const CMD_ADD_SEGMENT = 11;
 export const CMD_SET_NODE_SEGMENT = 12;
 export const CMD_MAKE_RIGID = 13;
 export const CMD_RELEASE_RIGID = 14;
+/** Adds a hinge joint (plan 005, phase 5.5). See `CommandBatch.addJoint`. */
+export const CMD_ADD_JOINT = 15;
+/** Sets a joint's drive. See `CommandBatch.setJointTarget`. */
+export const CMD_SET_JOINT_TARGET = 16;
+/** Joint drive modes (`joint::JOINT_FREE`, `JOINT_SERVO`, `JOINT_ROTOR`). */
+export const JOINT_FREE = 0;
+export const JOINT_SERVO = 1;
+export const JOINT_ROTOR = 2;
 
 /** No segment: a root's parent, a node with no segment (`segment::NO_SEGMENT`). */
 export const NO_SEGMENT = 0xffff_ffff;
@@ -189,6 +197,27 @@ export class CommandBatch {
   /** Releases a rigid segment: its nodes go loose with the body's velocity, the rest stays rigid. */
   releaseRigid(segment: number): number {
     return this.#push(CMD_RELEASE_RIGID, segment, 0, []);
+  }
+
+  /**
+   * Adds a hinge joint (plan 005, phase 5.5). Each side is two nodes on the axis and one reference
+   * node off it; each node may be loose, pinned or riding a rigid body. `a0` is pinned to `b0` and
+   * `a1` to `b1`, so only the turn about the axis is free. The angle is zero in the current pose;
+   * `min` and `max` are limits in radians, `-pi <= min <= 0 <= max <= pi` (`-pi` and `pi` for none).
+   * The core's result is the joint's index, or rejected for a dead or repeated node, all six on one
+   * body, a limit out of range, or a zero-length axis or arm.
+   */
+  addJoint(a0: number, a1: number, refA: number, b0: number, b1: number, refB: number, min: number = -Math.PI, max: number = Math.PI): number {
+    return this.#push(CMD_ADD_JOINT, a0, b0, [a1, b1, refA, refB, min, max]);
+  }
+
+  /**
+   * Sets a joint's drive: `JOINT_FREE`, `JOINT_SERVO` (target angle in [-pi, pi], moved toward at
+   * `rate` rad/s) or `JOINT_ROTOR` (target speed in rad/s), with the drive torque capped at `cap`
+   * newton-metres in every substep.
+   */
+  setJointTarget(joint: number, mode: number, target: number, rate: number, cap: number): number {
+    return this.#push(CMD_SET_JOINT_TARGET, joint, mode, [target, rate, cap]);
   }
 
   /** The whole height array as records of six (the last may be shorter), in index order. */
