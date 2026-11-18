@@ -56,7 +56,7 @@ Roadmap checks: "generated from parameters" in 4.3; "join at rings, saved and lo
   **Test:** 4.2's checks for all three; a leg pressed along its axis at a slowly rising force (a headless press: the mount pinned, a force on the foot) stays elastic below the crush force, then shortens at a nearly constant force (within 10%) over its crush stroke, then the crush bay breaks; the upper leg does not yield before the crush bay does; the engine and pod each carry the hopper's full thrust through their lattices with no yield.
   Demo: skip (the parts gallery is shown in 4.9).
 
-- [ ] **4.4 Attachment rings and the assembler.** Build with: Sonnet.
+- [x] **4.4 Attachment rings and the assembler.** Build with: Sonnet.
   `src/parts/assemble.ts`: the weld from "Settled", the clock, mount patches, the assembly tree (each part's parent and the seam between them), segment indices and never-live flags carried through, and a reason for every refusal (ring sizes differ, node counts differ, ring already used, a part attached twice, a cycle). Output: one craft (nodes, beams, panels, thrusters, segments, seams, tree) that compiles to commands.
   **Test:** the hopper assembles from its seven parts; node count is the sum of the parts minus the merged nodes, mass is the sum of the parts exactly, merged nodes sit within 1e-9 m of where both parts put them, the child's ring beams are gone and its seam beams are marked; each clock gives the expected rotation of a marked node; every refusal case is refused with its reason and changes nothing; the hopper stands on flat ground for 20 s with no yield and comes to rest, within the substep budget.
   Demo: skip.
