@@ -1,6 +1,6 @@
 # ribcage roadmap
 
-**TL;DR.** Overall progress: **44%**. Now: milestones 1 (solver core and tools), 2 (2D bridge builder) are complete, and so is milestone 3 (3D on terrain in Three.js): terrain, ground contact, a tower and a bridge that stand and collapse, the Three.js page with time controls, record and replay and panels skinned to the nodes (see [Plan 003](docs/plans/003_terrain_3d.md)). Milestone 4 (parts and assembly, [Plan 004](docs/plans/004_parts_and_assembly.md)) has all four checks ticked (the hopper lifts off and its hard landing snaps a leg on the craft page); the assembly panel (4.10) is built (the hopper assembled by clicks flies to the same hash); the milestone demo (4.11) is still to build. First playable slice ends at milestone 4.
+**TL;DR.** Overall progress: **44%**. Now: milestones 1 (solver core and tools), 2 (2D bridge builder) are complete, and so is milestone 3 (3D on terrain in Three.js): terrain, ground contact, a tower and a bridge that stand and collapse, the Three.js page with time controls, record and replay and panels skinned to the nodes (see [Plan 003](docs/plans/003_terrain_3d.md)). Milestone 4 (parts and assembly, [Plan 004](docs/plans/004_parts_and_assembly.md)) is complete: the hopper is assembled from parts, lifts off, and its hard landing snaps a leg on the craft page; the assembly panel puts it together by clicks to the same hash, and the demo is recorded. The first playable slice ends here. Next is milestone 5 (rigid by default).
 
 This page is the single answer to "what are we building, and how far along is it?". The design is the [spec](docs/research/node-beam-engine-design-spec.md). The detailed work for the current milestone lives in its plan.
 
@@ -22,7 +22,7 @@ Each milestone has a weight (its share of the whole) and a short list of checks.
 | 1 | Solver core and tools | 12 | 100% | done |
 | 2 | 2D bridge builder | 8 | 100% | done |
 | 3 | 3D on terrain in Three.js | 10 | 100% | done |
-| 4 | Parts and assembly (first playable slice) | 12 | 100% | checks ticked; assembly panel (4.10) done; milestone wrap and demo (4.11) still to build |
+| 4 | Parts and assembly (first playable slice) | 12 | 100% | done |
 | 5 | Rigid by default | 16 | 0% | |
 | 6 | Aerodynamics | 10 | 0% | |
 | 7 | Ground and water | 10 | 0% | |

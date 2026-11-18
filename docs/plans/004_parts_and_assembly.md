@@ -91,7 +91,7 @@ Roadmap checks: "generated from parameters" in 4.3; "join at rings, saved and lo
   **Test:** in Node, the panel's actions produce the same craft file as building the hopper in code; in the browser (headless), assembling the hopper by clicks and flying it gives the same hash as the fixture.
   Demo: assembling the hopper part by part, then launching it.
 
-- [ ] **4.11 Milestone wrap.** Build with: Sonnet.
+- [x] **4.11 Milestone wrap.** Build with: Sonnet.
   Timing of the hopper standing, lifting off and crashing (nodes, beams, contacts, substeps, ms per step, contact share, as ER 003's table), the milestone demo from the [demo plan](/docs/research/demo-and-media-plan.md) ("assemble a rocket from parts, launch, then the hard landing that snaps a leg, with a slow-motion stress view of the snap"), recorded headless, the roadmap percentages, and the record closed with what milestone 5 should know (how much the engine and pod lattices wobble, the mass ratio at seams, and whether the segment and seam data are enough for sleeping).
 
 ## Not in this milestone
