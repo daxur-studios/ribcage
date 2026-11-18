@@ -46,7 +46,7 @@ Roadmap checks: "generated from parameters" in 4.3; "join at rings, saved and lo
   **Test:** a single steel strut and a single aluminium strut, pulled in the core, yield at `σ_y · A` within 1% and break at their stated strain, in tension and in compression; the reported substep count equals what the core uses on a small test lattice; damping from `ζ` on a two-node spring decays at the expected rate within 5%.
   Demo: skip (nothing to see yet).
 
-- [ ] **4.2 Truss and tank generators.** Build with: Sonnet.
+- [x] **4.2 Truss and tank generators.** Build with: Sonnet.
   `src/parts/truss.ts` (square or triangular section, length, width, bays, material, member area) and `src/parts/tank.ts` (radius, length, ring node count, rings, material, wall area, mass): ring and longitudinal members, crossed diagonals in every wall quad, in-ring perimeter, chords and diameters so each ring keeps its shape, end rings declared as attachment rings, side mount patches, one segment per bay **[assumption]** with seams and section properties between bays, panels on every wall quad.
   **Test** (`test/parts.test.ts`): for a sweep of parameters each part compiles, its mass equals the stated mass exactly, it is within the substep budget, it rests on flat ground for 10 s with no yield and comes to rest (every node slower than 1 mm/s), a tank squeezed across a diameter springs back (no mechanism), and the same parameters give byte-identical commands twice; ring points are exact (each node at the stated radius within 1e-12 m, and opposite nodes exact negatives).
   Demo: skip (shown in 4.9).

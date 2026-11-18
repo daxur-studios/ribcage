@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 import { CommandBatch } from "../src/commands.ts";
-import { Core, EVENT_BREAK, EVENT_YIELD } from "../src/core.ts";
+import { Core, EVENT_BREAK, EVENT_FREEZE, EVENT_YIELD } from "../src/core.ts";
 import { GRAVITY } from "../src/design.ts";
 import { MATERIALS, STIFFNESS_SCALE, dampingFor, member, reducedMass, type MaterialId } from "../src/parts/material.ts";
 import {
@@ -18,6 +18,10 @@ import {
   resolveBeam,
   type Part,
 } from "../src/parts/part.ts";
+import { RING_COUNTS, ringPoint, unitCosSin, distributeMass } from "../src/parts/shared.ts";
+import { ringBracing, tank, type TankParams } from "../src/parts/tank.ts";
+import { truss, type TrussParams } from "../src/parts/truss.ts";
+import { compileTerrain, flatTerrain } from "../src/terrain.ts";
 import { World } from "../src/world.ts";
 
 const WASM_PATH = new URL("../target/wasm32-unknown-unknown/release/beam_core.wasm", import.meta.url);
@@ -373,3 +377,366 @@ test("damping from ζ on a two-node spring decays at ζ·ω_n within 5%", async 
   const expected = zeta * omegaN;
   assert.ok(Math.abs(rate / expected - 1) < 0.05, `decay rate ${rate.toFixed(4)} /s, expected ${expected} /s`);
 });
+
+// ---------------------------------------------------------------------------------------------
+// Truss and tank generators (phase 4.2)
+
+const TANKS: TankParams[] = [
+  { radius: 1, length: 2.5, ringNodes: 8, rings: 5, material: "aluminium", wallArea: 5e-4, mass: 2000 },
+  { radius: 0.5, length: 1, ringNodes: 4, rings: 2, material: "steel", wallArea: 2e-4, mass: 200 },
+  { radius: 1.5, length: 3, ringNodes: 12, rings: 4, material: "aluminium", wallArea: 4e-4, mass: 1500 },
+  { radius: 0.8, length: 2, ringNodes: 16, rings: 3, material: "carbon", wallArea: 3e-4, mass: 2000 },
+  { radius: 2, length: 4, ringNodes: 24, rings: 6, material: "aluminium", wallArea: 6e-4, mass: 4000 },
+  { radius: 1, length: 1.5, ringNodes: 6, rings: 3, material: "steel", wallArea: 3e-4, mass: 1000 },
+];
+
+const TRUSSES: TrussParams[] = [
+  { section: "square", length: 4, width: 1, bays: 4, material: "aluminium", memberArea: 3e-4, mass: 300 },
+  { section: "triangle", length: 3, width: 0.8, bays: 3, material: "steel", memberArea: 1.5e-4, mass: 200 },
+  { section: "square", length: 1, width: 1, bays: 1, material: "carbon", memberArea: 2e-4, mass: 80 },
+  { section: "triangle", length: 6, width: 1, bays: 6, material: "aluminium", memberArea: 3e-4, mass: 400 },
+  { section: "square", length: 2, width: 0.5, bays: 2, material: "steel", memberArea: 1e-4, mass: 150 },
+];
+
+type Pose = "standing" | "on its side";
+
+interface SweepCase {
+  name: string;
+  build: () => Part;
+  stated: number;
+  /** How the rest test sets it down. A slender truss rocks on its end nodes (ER 004, finding), so it lies on a face. */
+  poses: Pose[];
+}
+
+const SWEEP: SweepCase[] = [
+  ...TANKS.map((p, i): SweepCase => ({ name: `tank ${i} (${p.ringNodes} nodes, ${p.rings} rings, ${p.material})`, build: () => tank(p), stated: p.mass, poses: ["standing"] })),
+  ...TRUSSES.map((p, i): SweepCase => ({ name: `truss ${i} (${p.section}, ${p.bays} bays, ${p.material})`, build: () => truss(p), stated: p.mass!, poses: p.length <= 2 * p.width ? ["standing", "on its side"] : ["on its side"] })),
+];
+
+/** The part turned so its axis is along x and lying on a wall face, just above the ground. */
+function onItsSide(part: Part): Part {
+  const low = Math.min(...part.nodes.map((n) => n.z));
+  return { ...part, nodes: part.nodes.map((n) => ({ ...n, x: n.y, y: n.z - low + n.radius + 0.001, z: n.x })) };
+}
+
+function commandsOf(part: Part): Uint8Array {
+  const batch = new CommandBatch();
+  compilePart(batch, part);
+  return batch.bytes.slice();
+}
+
+/** The same part with every node moved up by `dy`. */
+function lifted(part: Part, dy: number): Part {
+  return { ...part, nodes: part.nodes.map((n) => ({ ...n, y: n.y + dy })) };
+}
+
+test("the ring table gives unit vectors, exactly opposite points, and refuses other angles", () => {
+  for (let u = 0; u < 24; u++) {
+    if (u % 12 === 1 || u % 12 === 5 || u % 12 === 7 || u % 12 === 11) continue;
+    const [c, s] = unitCosSin(u);
+    assert.ok(Math.abs(c * c + s * s - 1) < 1e-15, `unit ${u}`);
+    const [oc, os] = unitCosSin(u + 24);
+    assert.ok(oc === -c && os === -s, `unit ${u} and its opposite`);
+  }
+  assert.deepEqual([...unitCosSin(0)], [1, 0]);
+  assert.deepEqual([...unitCosSin(12)], [0, 1]);
+  assert.deepEqual([...unitCosSin(24)], [-1, 0]);
+  assert.ok(unitCosSin(4)[0] === Math.sqrt(3) / 2 && unitCosSin(4)[1] === 0.5, "30° from sqrt(3)/2 and 1/2");
+  assert.ok(Math.abs(unitCosSin(2)[0] - 0.9659258262890683) < 1e-15, "15° from the half-angle square root");
+  assert.throws(() => unitCosSin(1), /not a multiple/);
+  assert.throws(() => unitCosSin(0.5), /whole number/);
+  assert.deepEqual([...ringPoint(4, 1, 2)], [0, 2]);
+});
+
+for (const c of SWEEP) {
+  test(`${c.name}: compiles, mass is exactly the stated mass, within the budget, same bytes twice`, async () => {
+    const part = c.build();
+    const batch = new CommandBatch();
+    compilePart(batch, part);
+    const world = new World(await loadCore());
+    assert.equal(world.apply(batch).rejected, 0);
+    assert.equal(world.nodeCount, part.nodes.length);
+    assert.equal(world.beamCount, part.beams.length);
+    world.free();
+
+    assert.ok(partMass(part) === c.stated, `mass ${partMass(part)} is not the stated ${c.stated}`);
+    for (const n of part.nodes) assert.ok(n.mass > 0);
+    const b = partBudget(part);
+    assert.ok(b.withinBudget, b.problems.join("; "));
+    assert.ok(b.substeps <= SUBSTEP_BUDGET && b.massRatio <= NODE_MASS_RATIO_BUDGET);
+
+    assert.deepEqual(commandsOf(part), commandsOf(c.build()));
+  });
+
+  for (const pose of c.poses) test(`${c.name}, ${pose}: rests on flat ground for 10 s with no yield and every node under 1 mm/s`, async () => {
+    const part = c.build();
+    const world = new World(await loadCore());
+    const build = new CommandBatch();
+    compileTerrain(build, flatTerrain(41, 41, -20, -20, 1));
+    compilePart(build, pose === "standing" ? lifted(part, part.nodes[0]!.radius + 0.001) : onItsSide(part));
+    assert.equal(world.apply(build).rejected, 0);
+    let bad = 0;
+    let prev = world.positions();
+    let endSpeed = 0;
+    for (let s = 0; s < 600; s++) {
+      world.step();
+      for (const e of world.events()) if (e.kind === EVENT_YIELD || e.kind === EVENT_BREAK || e.kind === EVENT_FREEZE) bad++;
+      const p = world.positions();
+      let fastest = 0;
+      for (let i = 0; i < p.length; i += 3) {
+        const d = Math.sqrt((p[i]! - prev[i]!) ** 2 + (p[i + 1]! - prev[i + 1]!) ** 2 + (p[i + 2]! - prev[i + 2]!) ** 2);
+        fastest = Math.max(fastest, d / STEP);
+      }
+      endSpeed = fastest;
+      prev = p;
+    }
+    assert.equal(bad, 0, "no yield, break or freeze");
+    assert.ok(endSpeed < 1e-3, `still moving at ${endSpeed} m/s after 10 s`);
+    for (let i = 1; i < prev.length; i += 3) assert.ok(prev[i]! > -0.01, "above the ground");
+    world.free();
+  });
+}
+
+test("tank ring points are exact: at the stated radius within 1e-12 m, opposite nodes exact negatives", () => {
+  assert.deepEqual([...new Set(TANKS.map((t) => t.ringNodes))].sort((a, b) => a - b), [...RING_COUNTS], "the sweep covers every ring count");
+  for (const p of TANKS) {
+    const part = tank(p);
+    const n = p.ringNodes;
+    for (let k = 0; k < p.rings; k++) {
+      for (let j = 0; j < n; j++) {
+        const a = part.nodes[k * n + j]!;
+        assert.ok(Math.abs(Math.sqrt(a.x * a.x + a.z * a.z) - p.radius) < 1e-12, `ring ${k} node ${j} off its radius`);
+        const o = part.nodes[k * n + ((j + n / 2) % n)]!;
+        assert.ok(o.x === -a.x && o.z === -a.z && o.y === a.y, `ring ${k} node ${j} and its opposite`);
+        assert.ok(!Object.is(a.x, -0) && !Object.is(a.z, -0), "no negative zero");
+      }
+    }
+  }
+});
+
+test("a truss's corners are exact: the square at ±w/2, the triangle on its circle with sides w", () => {
+  const sq = truss(TRUSSES[0]!);
+  assert.deepEqual(sq.nodes.slice(0, 4).map((n) => [n.x, n.z]), [[0.5, 0.5], [-0.5, 0.5], [-0.5, -0.5], [0.5, -0.5]]);
+  const tri = truss(TRUSSES[1]!);
+  const r = 0.8 / Math.sqrt(3);
+  for (const n of tri.nodes.slice(0, 3)) assert.ok(Math.abs(Math.sqrt(n.x * n.x + n.z * n.z) - r) < 1e-12);
+  const [a, b, c] = tri.nodes as [PartNodeT, PartNodeT, PartNodeT];
+  const side = (p: PartNodeT, q: PartNodeT): number => Math.sqrt((p.x - q.x) ** 2 + (p.z - q.z) ** 2);
+  assert.ok(Math.abs(side(a, b) - 0.8) < 1e-12 && Math.abs(side(b, c) - 0.8) < 1e-12 && Math.abs(side(c, a) - 0.8) < 1e-12, "sides are the width");
+  assert.equal(a.x, 0); // the top corner is on the z axis, at 90°
+});
+type PartNodeT = Part["nodes"][number];
+
+test("every wall quad has the longitudinal and both diagonals, and ring beams are flagged", () => {
+  for (const c of SWEEP) {
+    const part = c.build();
+    const has = (a: number, b: number): boolean => part.beams.some((m) => (m.a === a && m.b === b) || (m.a === b && m.b === a));
+    const n = part.rings[0]!.nodes.length;
+    const levels = part.nodes.length / n;
+    for (let k = 0; k < levels - 1; k++) {
+      for (let j = 0; j < n; j++) {
+        const j1 = (j + 1) % n;
+        assert.ok(has(k * n + j, (k + 1) * n + j), `${c.name}: longitudinal ${k},${j}`);
+        assert.ok(has(k * n + j, (k + 1) * n + j1), `${c.name}: diagonal one ${k},${j}`);
+        assert.ok(has(k * n + j1, (k + 1) * n + j), `${c.name}: diagonal two ${k},${j}`);
+      }
+    }
+    const keys = part.beams.map((m) => `${Math.min(m.a, m.b)}-${Math.max(m.a, m.b)}`);
+    assert.equal(new Set(keys).size, keys.length, `${c.name}: duplicate beams`);
+    const ring = part.beams.filter((m) => m.ring);
+    assert.ok(ring.every((m) => Math.floor(m.a / n) === Math.floor(m.b / n)), `${c.name}: a ring beam leaves its ring`);
+    assert.equal(ring.length + 3 * n * (levels - 1), part.beams.length, `${c.name}: every other beam is a wall beam`);
+    assert.ok(part.beams.every((m) => m.zeta === ZETA_STRUCTURE));
+  }
+});
+
+test("each ring keeps its shape: the perimeter, the chords and the diameters, each once", () => {
+  assert.equal(ringBracing(4).length, 6, "a square: four sides and two diagonals");
+  assert.equal(ringBracing(6).length, 6 + 6 + 3);
+  assert.equal(ringBracing(8).length, 8 + 8 + 4);
+  assert.equal(ringBracing(12).length, 12 + 12 + 12 + 6, "from 12 nodes on, the quarter chords too");
+  assert.equal(ringBracing(24).length, 24 + 24 + 24 + 12);
+  for (const n of RING_COUNTS) {
+    const pairs = ringBracing(n);
+    const keys = new Set(pairs.map(([a, b]) => `${Math.min(a, b)}-${Math.max(a, b)}`));
+    assert.equal(keys.size, pairs.length, `${n}: no pair twice`);
+    for (let j = 0; j < n; j++) assert.ok(keys.has(`${Math.min(j, (j + 1) % n)}-${Math.max(j, (j + 1) % n)}`), `${n}: side ${j}`);
+    for (let j = 0; j < n / 2; j++) assert.ok(keys.has(`${j}-${j + n / 2}`), `${n}: diameter ${j}`);
+  }
+});
+
+test("segments, seams, rings and patches of every tank, and of a truss", () => {
+  for (const p of TANKS) {
+    const part = tank(p);
+    const n = p.ringNodes;
+    const bays = p.rings - 1;
+    assert.equal(part.segments.length, bays);
+    assert.ok(part.segments.every((s) => !s.neverLive));
+    assert.equal(part.seams.length, bays - 1);
+    for (const [i, s] of part.seams.entries()) {
+      assert.equal(s.segmentA, i);
+      assert.equal(s.segmentB, i + 1);
+      assert.ok(Math.abs(s.area / (n * p.wallArea) - 1) < 1e-12, "axial area is the sum of the longitudinals");
+      assert.ok(Math.abs(s.bending / (n * p.wallArea * p.radius * p.radius) - 1) < 1e-12, "bending is Σ A · d² about the axis");
+    }
+    assert.deepEqual(part.rings.map((r) => r.id), ["bottom", "top"]);
+    assert.deepEqual([...part.rings[0]!.axis], [0, -1, 0]);
+    assert.deepEqual([...part.rings[1]!.axis], [0, 1, 0]);
+    assert.ok(Math.abs(part.rings[1]!.centre[1] - p.length) < 1e-12);
+    assert.ok(Math.abs(part.nodes[(p.rings - 1) * n]!.y - p.length) < 1e-12);
+    for (const r of part.rings) {
+      assert.equal(r.nodes.length, n);
+      assert.equal(r.radius, p.radius);
+    }
+    assert.equal(part.patches.length, n * bays);
+    assert.ok(part.nodes.every((v) => v.segment >= 0 && v.segment < bays));
+    assert.ok(part.capsule !== null && part.capsule.radius === p.radius);
+  }
+  const t = truss(TRUSSES[0]!);
+  assert.equal(t.segments.length, 4);
+  assert.equal(t.seams.length, 3);
+  assert.ok(Math.abs(t.seams[0]!.area - 4 * 3e-4) < 1e-15);
+  assert.ok(Math.abs(t.seams[0]!.bending - 4 * 3e-4 * 0.5) < 1e-15, "four rails at d² = 0.5 about the axis");
+  assert.equal(t.patches.length, 16);
+  assert.equal(t.rings[0]!.nodes.length, 4);
+  assert.equal(truss(TRUSSES[1]!).rings[0]!.nodes.length, 3);
+});
+
+test("panels: each wall quad has four tetrahedra, none flat, made of nodes of its bay", () => {
+  for (const c of SWEEP) {
+    const part = c.build();
+    const n = part.rings[0]!.nodes.length;
+    const bays = part.nodes.length / n - 1;
+    assert.equal(part.panels.length, n * bays, `${c.name}: one panel on every wall quad`);
+    for (const [q, cell] of part.panels.entries()) {
+      const b = Math.floor(q / n);
+      assert.equal(cell.tets.length, 4, `${c.name}: four tetrahedra in a panel`);
+      for (const tet of cell.tets) {
+        for (const i of tet) assert.ok(Math.floor(i / n) === b || Math.floor(i / n) === b + 1, `${c.name}: a tetrahedron node outside its bay`);
+        const [p0, p1, p2, p3] = tet.map((i) => part.nodes[i]!) as [PartNodeT, PartNodeT, PartNodeT, PartNodeT];
+        const e1 = [p1.x - p0.x, p1.y - p0.y, p1.z - p0.z] as const;
+        const e2 = [p2.x - p0.x, p2.y - p0.y, p2.z - p0.z] as const;
+        const e3 = [p3.x - p0.x, p3.y - p0.y, p3.z - p0.z] as const;
+        const det = e1[0] * (e2[1] * e3[2] - e2[2] * e3[1]) + e1[1] * (e2[2] * e3[0] - e2[0] * e3[2]) + e1[2] * (e2[0] * e3[1] - e2[1] * e3[0]);
+        const len = (v: readonly [number, number, number]): number => Math.sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]);
+        assert.ok(Math.abs(det) > 1e-6 * len(e1) * len(e2) * len(e3), `${c.name}: a flat tetrahedron`);
+      }
+    }
+  }
+});
+
+test("a stated mass below the members' own mass is refused, and bad parameters are refused with a reason", () => {
+  const base = TANKS[0]!;
+  assert.throws(() => tank({ ...base, mass: 10 }), /below the members' own mass/);
+  assert.throws(() => tank({ ...base, ringNodes: 5 }), /ring has 5 nodes/);
+  assert.throws(() => tank({ ...base, ringNodes: 32 }), /ring has 32 nodes/);
+  assert.throws(() => tank({ ...base, rings: 1 }), /rings/);
+  assert.throws(() => tank({ ...base, radius: 0 }), /radius/);
+  assert.throws(() => tank({ ...base, length: -1 }), /length/);
+  assert.throws(() => tank({ ...base, wallArea: 0 }), /area/);
+  assert.throws(() => tank({ ...base, mass: Number.NaN }), /mass/);
+  const t = TRUSSES[0]!;
+  assert.throws(() => truss({ ...t, mass: 1 }), /below the members' own mass/);
+  assert.throws(() => truss({ ...t, bays: 0 }), /bays/);
+  assert.throws(() => truss({ ...t, section: "hex" as "square" }), /section/);
+  assert.throws(() => truss({ ...t, width: 0 }), /width/);
+  // No stated mass: exactly the members' own mass.
+  const { mass: _unused, ...rest } = t;
+  const bare = truss(rest);
+  let own = 0;
+  for (const b of bare.beams) {
+    const p = bare.nodes[b.a]!;
+    const q = bare.nodes[b.b]!;
+    own += MATERIALS[b.material].density * b.area * Math.sqrt((q.x - p.x) ** 2 + (q.y - p.y) ** 2 + (q.z - p.z) ** 2);
+  }
+  assert.ok(Math.abs(partMass(bare) / own - 1) < 1e-12);
+});
+
+test("the stated mass is each member's own mass at its ends plus an even share of the rest", () => {
+  const p = TANKS[0]!;
+  const part = tank(p);
+  const bare = tank(p);
+  distributeMass(bare, null);
+  const extra = part.nodes.map((n, i) => n.mass - bare.nodes[i]!.mass);
+  for (let i = 0; i < extra.length; i++) assert.ok(Math.abs(extra[i]! / extra[0]! - 1) < 1e-9, `node ${i} gets the same share`);
+});
+
+// ---------------------------------------------------------------------------------------------
+// A tank squeezed across a diameter springs back
+
+interface Squeeze {
+  deflection: number;
+  residual: number;
+  failures: number;
+}
+
+/** Floats the part (gravity cancelled), squeezes one ring across a diameter, lets go, and measures. */
+function squeezeRun(core: Core, part: Part, n: number, ring: number, force: number): Squeeze {
+  const world = new World(core);
+  const build = new CommandBatch();
+  compilePart(build, part);
+  assert.equal(world.apply(build).rejected, 0);
+  const a = ring * n;
+  const b = ring * n + n / 2;
+  const gap = (): number => {
+    const p = world.positions();
+    return Math.sqrt((p[b * 3]! - p[a * 3]!) ** 2 + (p[b * 3 + 1]! - p[a * 3 + 1]!) ** 2 + (p[b * 3 + 2]! - p[a * 3 + 2]!) ** 2);
+  };
+  const d0 = gap();
+  let failures = 0;
+  const run = (steps: number, f: (s: number) => number): number[] => {
+    const seen: number[] = [];
+    for (let s = 0; s < steps; s++) {
+      const cmds = new CommandBatch();
+      for (const [i, node] of part.nodes.entries()) cmds.addForce(i, 0, node.mass * GRAVITY, 0);
+      const squeeze = f(s);
+      // Inward along the line between the two nodes, re-aimed each step. A fixed direction would act
+      // like a compressed rod on a floating body and slowly turn it (ER 004).
+      const q = world.positions();
+      const dx = q[b * 3]! - q[a * 3]!;
+      const dy = q[b * 3 + 1]! - q[a * 3 + 1]!;
+      const dz = q[b * 3 + 2]! - q[a * 3 + 2]!;
+      const len = Math.sqrt(dx * dx + dy * dy + dz * dz);
+      const k = squeeze / len;
+      cmds.addForce(a, dx * k, dy * k, dz * k);
+      cmds.addForce(b, -dx * k, -dy * k, -dz * k);
+      assert.equal(world.apply(cmds).rejected, 0);
+      world.step();
+      failures += world.events().filter((e) => e.kind === EVENT_YIELD || e.kind === EVENT_BREAK).length;
+      seen.push(gap());
+    }
+    return seen;
+  };
+  const mean = (xs: number[]): number => xs.reduce((x, y) => x + y, 0) / xs.length;
+  // Smooth in and out, so the load is gentle and the held and released readings are steady.
+  const smooth = (s: number, steps: number): number => {
+    const u = (s + 1) / steps;
+    return u * u * (3 - 2 * u);
+  };
+  run(600, (s) => force * smooth(s, 600)); // ramp up
+  const held = mean(run(600, () => force).slice(-200));
+  run(600, (s) => force * (1 - smooth(s, 600))); // ramp down
+  const end = mean(run(600, () => 0).slice(-200));
+  world.free();
+  return { deflection: d0 - held, residual: Math.abs(end - d0), failures };
+}
+
+for (const idx of [0, 2, 4, 5]) {
+  const p = TANKS[idx]!;
+  test(`a ${p.ringNodes}-node ${p.material} tank squeezed across a diameter springs back`, async () => {
+    const core = await loadCore();
+    const part = tank(p);
+    const force = 0.05 * member(p.material, p.wallArea).yieldForce!;
+    const mid = Math.floor(p.rings / 2);
+    const r = squeezeRun(core, part, p.ringNodes, mid, force);
+    assert.equal(r.failures, 0, "elastic: nothing yields");
+    assert.ok(r.deflection > 0, "the ring is pushed in");
+    assert.ok(r.deflection < 0.02 * p.radius, `squeezed ${r.deflection} m of a ${p.radius} m ring: a mechanism`);
+    assert.ok(r.residual < 0.05 * r.deflection + 1e-9, `${r.residual} m left of ${r.deflection} m`);
+
+    // The test can see a mechanism: with the ring members taken out the same push squeezes much further.
+    const loose: Part = { ...part, beams: part.beams.filter((m) => !m.ring) };
+    const l = squeezeRun(core, loose, p.ringNodes, mid, force);
+    assert.ok(Math.abs(l.deflection) > 5 * r.deflection, `without ring bracing it squeezed ${l.deflection} m against ${r.deflection} m`);
+  });
+}
