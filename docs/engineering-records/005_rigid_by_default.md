@@ -358,3 +358,16 @@ Ratio is estimate / measured. Bounds are in `test/estimate.test.ts` and `core/te
 - Read `world.est.seg_ratio` (per segment) after `step`; it is the larger of the segment's seams. Expect it 5 to 20% low at peaks and blind to locked-in stress.
 - The estimate needs the contact record on, which costs a little; switch it on with sleeping.
 
+
+## 2026-11-18 (phase 5.7 follow-up: the rover's "launch" is physics)
+
+Done by Opus, asked to fix the launch found while recording the 5.7 clip. There was nothing to fix in the core; the finding above was wrong. No core change, no hash moved.
+
+- **[finding]** Correction to the 5.7 launch finding. The 4 kN push held on wheel 0's hub tips the rover about the diagonally opposite wheel, which stays on the pad as a pivot while the other three rise. The pivot's normal force is what adds the upward momentum, and it does no work. Over the push, the mechanical energy gained (node kinetic plus potential) is within -1.0% of the push's work (14.3 kJ against 14.5 kJ over 2.3 s), with no point where the gain runs ahead of the work. So the contacts inject no energy.
+- **[finding]** The tipping push from the settled contact points, hub nodes and centre of mass is 2.255 kN, about half the 4.51 kN weight, as for lifting one corner of a table. In the sim the rover holds at 2.1 kN (wheel 0 up 13 mm, chassis flex), creeps at 2.2 kN and tips at 2.25 kN. That is within 2% of the static answer.
+- **[decision]** `test/rover.test.ts` gains "a corner push tips the rover at about half its weight, and the contacts add no energy". It asserts the following:
+  - At 2.1 kN, wheel 0 rises under 3 cm.
+  - At 2.3 kN, wheel 0 rises over 0.3 m.
+  - At 4 kN, the energy gained is between 97% and 100.5% of the work.
+  The 5.7 stress test keeps its 4 kN "rock", since its bounds were measured on it, and the comment now says it flips the rover.
+- **[finding]** Not this question, seen on the way: the all-live rover (`compileRover(..., { rigid: false })`) does not rest. Its wheel beams pass 5x yield within five steps of the start, and it bounces with its centre of mass near 1.2 m instead of 0.58 m. No test uses it; the wheels are rigid by default. This belongs to 5.6, and I did not rework it.
