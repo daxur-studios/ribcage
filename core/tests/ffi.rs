@@ -3,7 +3,9 @@
 //! builds give the same bits.
 
 use beam_core::bench::{bench_scene, BenchSpec};
-use beam_core::command::{apply_commands, Command, CMD_ADD_BEAM, CMD_ADD_NODE, CMD_SET_TERRAIN, CMD_TERRAIN_HEIGHTS};
+use beam_core::command::{
+    apply_commands, Command, CMD_ADD_BEAM, CMD_ADD_NODE, CMD_ADD_THRUSTER, CMD_SET_TERRAIN, CMD_SET_THROTTLE, CMD_TERRAIN_HEIGHTS,
+};
 use beam_core::event::{Event, EVENT_BREAK};
 use beam_core::ffi::*;
 use beam_core::real::Vec3;
@@ -194,6 +196,78 @@ fn terrain_scene_through_the_boundary_matches_the_direct_world() {
         }
         assert_eq!(rc_state_hash(h), direct);
         assert_eq!(rc_state_hash(h), TERRAIN_SCENE_120, "golden: {:#018x}", rc_state_hash(h));
+        rc_host_free(h);
+    }
+}
+
+/// A thrusting craft after 120 steps: three 10 to 20 kg nodes in a triangle at height 50 m
+/// (nothing to land on), two thrusters, and the throttles changed mid-run (thruster 0 full from the
+/// start, thruster 1 at 0.6 from step 20, thruster 0 down to 0.3 from step 70). The same
+/// records are built in `test/wasm.test.ts`.
+pub const THRUST_SCENE_120: u64 = 0x765d_0f44_7551_4944;
+
+fn thrust_scene_setup() -> Vec<Command> {
+    let rec = |kind, a, b, f| Command { kind, a, b, reserved: 0, f };
+    let mut cmds = Vec::new();
+    for [x, y, z, inv_mass] in [[0.0, 50.0, 0.0, 0.1], [1.5, 50.0, 0.0, 0.1], [0.75, 50.0, 1.3, 0.05]] {
+        cmds.push(rec(CMD_ADD_NODE, 0, 0, [x, y, z, inv_mass, 0.1, 0.0]));
+    }
+    for (a, b) in [(0, 1), (1, 2), (2, 0)] {
+        cmds.push(rec(CMD_ADD_BEAM, a, b, [1.5, 1e-6, 50.0, 0.5, 1.0, 0.0]));
+    }
+    cmds.push(rec(CMD_ADD_THRUSTER, 0, 1, [400.0, 0.0, 0.0, 0.0, 0.0, 0.0]));
+    cmds.push(rec(CMD_ADD_THRUSTER, 2, 1, [250.0, 0.0, 0.0, 0.0, 0.0, 0.0]));
+    cmds.push(rec(CMD_SET_THROTTLE, 0, 0, [1.0, 0.0, 0.0, 0.0, 0.0, 0.0]));
+    cmds
+}
+
+/// The throttle commands applied before step `s` (0-based), if any.
+fn thrust_scene_at(s: u32) -> Vec<Command> {
+    let rec = |kind, a, b, f| Command { kind, a, b, reserved: 0, f };
+    match s {
+        20 => vec![rec(CMD_SET_THROTTLE, 1, 0, [0.6, 0.0, 0.0, 0.0, 0.0, 0.0])],
+        70 => vec![rec(CMD_SET_THROTTLE, 0, 0, [0.3, 0.0, 0.0, 0.0, 0.0, 0.0])],
+        _ => Vec::new(),
+    }
+}
+
+/// Thrust through the boundary gives the same bits as applied directly, and matches the golden
+/// that the WebAssembly build is held to.
+#[test]
+fn thrust_scene_through_the_boundary_matches_the_direct_world() {
+    let mut w = World::new();
+    let mut results = Vec::new();
+    let setup = thrust_scene_setup();
+    apply_commands(&mut w, &setup, &mut results);
+    assert!(!results.contains(&u32::MAX), "a record was rejected: {results:?}");
+    for s in 0..120 {
+        let more = thrust_scene_at(s);
+        if !more.is_empty() {
+            apply_commands(&mut w, &more, &mut results);
+            assert!(!results.contains(&u32::MAX));
+        }
+        step(&mut w);
+    }
+    let direct = state_hash(&w);
+    // It flew: the craft moved in +x and its thrusters were on.
+    assert!(w.pos[0].x > 0.5, "x = {}", w.pos[0].x);
+
+    unsafe {
+        let h = rc_host_new();
+        let dst = rc_commands_reserve(h, setup.len() as u32);
+        std::ptr::copy_nonoverlapping(setup.as_ptr(), dst, setup.len());
+        assert_eq!(rc_apply_commands(h), 0, "no record rejected");
+        for s in 0..120 {
+            let more = thrust_scene_at(s);
+            if !more.is_empty() {
+                let dst = rc_commands_reserve(h, more.len() as u32);
+                std::ptr::copy_nonoverlapping(more.as_ptr(), dst, more.len());
+                assert_eq!(rc_apply_commands(h), 0, "no record rejected");
+            }
+            rc_step(h);
+        }
+        assert_eq!(rc_state_hash(h), direct);
+        assert_eq!(rc_state_hash(h), THRUST_SCENE_120, "golden: {:#018x}", rc_state_hash(h));
         rc_host_free(h);
     }
 }

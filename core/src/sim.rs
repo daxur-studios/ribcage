@@ -6,6 +6,7 @@ use crate::event::Event;
 use crate::island::{build_islands, copy_back};
 use crate::real::{Real, Vec3};
 use crate::solver::{solve_island, substep_count_with, SubstepRule};
+use crate::thrust::apply_thrust;
 use crate::world::{World, NODE_FROZEN};
 
 /// Standard gravity as a per-node acceleration (a function so it can vary later).
@@ -55,6 +56,8 @@ fn step_inner(world: &mut World, choice: Choice) -> StepStats {
     world.events.clear();
     world.clamped_nodes = 0;
     let done = world.step_count + 1;
+    // Thrust goes in as ordinary external force, from the positions the step starts with.
+    apply_thrust(world);
     let mut islands = build_islands(world);
     let mut stats = StepStats::default();
     for isl in islands.iter_mut() {
@@ -144,7 +147,8 @@ fn mix_vec(h: &mut u64, v: Vec3) {
 
 /// FNV-1a over the raw bits of positions, velocities, rest lengths and flags, in index
 /// order, plus the step count. Dead slots are included so slot reuse is part of the state.
-/// The terrain (size, origin, cell, friction and every height) follows, if there is one.
+/// The terrain (size, origin, cell, friction and every height) follows, if there is one, and then
+/// the thrusters (ends, maximum and throttle), if there are any.
 pub fn state_hash(world: &World) -> u64 {
     let mut h = FNV_OFFSET;
     mix(&mut h, world.step_count);
@@ -172,6 +176,18 @@ pub fn state_hash(world: &World) -> u64 {
         mix_real(&mut h, t.friction);
         for &height in &t.heights {
             mix_real(&mut h, height);
+        }
+    }
+    // Thrusters, only when there are any (a world without them hashes as before phase 4.6). The
+    // node generations are not mixed in: they follow from the commands, as node generations
+    // already do for the nodes.
+    if !world.thr_tail.is_empty() {
+        mix(&mut h, world.thr_tail.len() as u64);
+        for t in 0..world.thr_tail.len() {
+            mix(&mut h, world.thr_tail[t] as u64);
+            mix(&mut h, world.thr_head[t] as u64);
+            mix_real(&mut h, world.thr_max[t]);
+            mix_real(&mut h, world.thr_throttle[t]);
         }
     }
     h

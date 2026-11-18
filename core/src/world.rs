@@ -83,6 +83,15 @@ pub struct World {
     /// ([`crate::command`]). `None` means no ground, and then the world hashes and steps exactly
     /// as it did before terrain existed.
     pub terrain: Option<Terrain>,
+    // Per thruster (plan 004, phase 4.6; see [`crate::thrust`]). Never removed, so an index is
+    // stable. The generations are the nodes' at the time the thruster was made: a thruster whose
+    // node was deleted stays off even if the slot is reused.
+    pub thr_tail: Vec<u32>,
+    pub thr_head: Vec<u32>,
+    pub thr_tail_gen: Vec<u32>,
+    pub thr_head_gen: Vec<u32>,
+    pub thr_max: Vec<Real>,
+    pub thr_throttle: Vec<Real>,
 }
 
 impl Default for World {
@@ -113,6 +122,12 @@ impl Default for World {
             max_speed: DEFAULT_MAX_SPEED,
             clamped_nodes: 0,
             terrain: None,
+            thr_tail: Vec::new(),
+            thr_head: Vec::new(),
+            thr_tail_gen: Vec::new(),
+            thr_head_gen: Vec::new(),
+            thr_max: Vec::new(),
+            thr_throttle: Vec::new(),
         }
     }
 }
@@ -250,6 +265,32 @@ impl World {
         self.beam_flags[i as usize] = 0;
         self.beam_gen[i as usize] = self.beam_gen[i as usize].wrapping_add(1);
         self.free_beams.push(Reverse(i));
+    }
+
+    pub fn thruster_count(&self) -> u32 {
+        self.thr_tail.len() as u32
+    }
+
+    /// Adds a thruster from `tail` to `head` (distinct live nodes) with its throttle at zero, and
+    /// returns its index.
+    pub fn add_thruster(&mut self, tail: u32, head: u32, max_thrust: Real) -> u32 {
+        assert!(tail != head && self.node_alive(tail) && self.node_alive(head), "thruster ends must be distinct live nodes");
+        self.thr_tail.push(tail);
+        self.thr_head.push(head);
+        self.thr_tail_gen.push(self.node_gen[tail as usize]);
+        self.thr_head_gen.push(self.node_gen[head as usize]);
+        self.thr_max.push(max_thrust);
+        self.thr_throttle.push(0.0);
+        self.thruster_count() - 1
+    }
+
+    /// Whether both of a thruster's nodes are the live nodes it was made on.
+    pub fn thruster_nodes_live(&self, t: usize) -> bool {
+        let (a, b) = (self.thr_tail[t], self.thr_head[t]);
+        self.node_alive(a)
+            && self.node_alive(b)
+            && self.node_gen[a as usize] == self.thr_tail_gen[t]
+            && self.node_gen[b as usize] == self.thr_head_gen[t]
     }
 
     /// The one door for external force on a node (rule 7). Kept until the end of the step.

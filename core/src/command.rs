@@ -34,6 +34,12 @@ pub const CMD_SET_TERRAIN: u32 = 7;
 /// terrain, the count is out of range, the run goes past the last height or a height is not a
 /// finite number. Result: 1.
 pub const CMD_TERRAIN_HEIGHTS: u32 = 8;
+/// Adds a thruster (plan 004, phase 4.6): `a` = tail node, `b` = head node (distinct live nodes);
+/// `f[0]` = maximum thrust in newtons (finite, zero or more). Its throttle starts at zero. Result:
+/// the thruster's index.
+pub const CMD_ADD_THRUSTER: u32 = 9;
+/// `a` = thruster; `f[0]` = throttle, a finite number from 0 to 1. Result: 1.
+pub const CMD_SET_THROTTLE: u32 = 10;
 
 /// Result slot value for a rejected record.
 pub const REJECTED: u32 = u32::MAX;
@@ -147,6 +153,19 @@ fn apply_one(w: &mut World, c: &Command) -> u32 {
                 return REJECTED;
             }
             t.heights[start..start + count].copy_from_slice(&c.f[0..count]);
+            1
+        }
+        CMD_ADD_THRUSTER => {
+            if !node_ok(w, c.a) || !node_ok(w, c.b) || c.a == c.b || !c.f[0].is_finite() || c.f[0] < 0.0 {
+                return REJECTED;
+            }
+            w.add_thruster(c.a, c.b, c.f[0])
+        }
+        CMD_SET_THROTTLE => {
+            if c.a >= w.thruster_count() || !(0.0..=1.0).contains(&c.f[0]) {
+                return REJECTED;
+            }
+            w.thr_throttle[c.a as usize] = c.f[0];
             1
         }
         _ => REJECTED,

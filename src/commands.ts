@@ -17,6 +17,8 @@ export const CMD_ADD_FORCE = 5;
 export const CMD_SET_INV_MASS = 6;
 export const CMD_SET_TERRAIN = 7;
 export const CMD_TERRAIN_HEIGHTS = 8;
+export const CMD_ADD_THRUSTER = 9;
+export const CMD_SET_THROTTLE = 10;
 
 /** Most grid points along one side of a terrain (`terrain::MAX_GRID`). */
 export const MAX_TERRAIN_GRID = 257;
@@ -133,6 +135,19 @@ export class CommandBatch {
       throw new Error(`a terrain record carries 1 to ${HEIGHTS_PER_RECORD} heights, not ${heights.length}`);
     }
     return this.#push(CMD_TERRAIN_HEIGHTS, start, heights.length, heights);
+  }
+
+  /**
+   * Adds a thruster from node `tail` to node `head` with a maximum thrust in newtons; its throttle
+   * starts at zero. The core's result for it is the thruster's index (numbered in the order added).
+   */
+  addThruster(tail: number, head: number, maxThrust: number): number {
+    return this.#push(CMD_ADD_THRUSTER, tail, head, [maxThrust]);
+  }
+
+  /** Sets a thruster's throttle, 0 to 1. It pushes every step from now until it is set again. */
+  setThrottle(thruster: number, throttle: number): number {
+    return this.#push(CMD_SET_THROTTLE, thruster, 0, [throttle]);
   }
 
   /** The whole height array as records of six (the last may be shorter), in index order. */

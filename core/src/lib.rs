@@ -14,6 +14,7 @@ pub mod real;
 pub mod sim;
 pub mod solver;
 pub mod terrain;
+pub mod thrust;
 pub mod world;
 
 use real::Real;

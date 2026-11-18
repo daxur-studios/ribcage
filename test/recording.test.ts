@@ -77,7 +77,7 @@ test("the committed recording still replays to its hash, and recording it again 
   // The file's own bytes: the format and the recorded run are both stable. If this fails after a
   // deliberate solver change, regenerate with RIBCAGE_UPDATE_FIXTURE=1 and log why in the ER.
   // Same bytes except the ABI field: the stored file was made at ABI 2, before the terrain
-  // commands (ABI 3 only added command kinds), and replaying it above is the real check.
+  // commands (ABI 3 and 4 only added command kinds), and replaying it above is the real check.
   const abiBytes = stored.subarray(8, 12);
   const freshAtStoredAbi = fresh.slice();
   freshAtStoredAbi.set(abiBytes, 8);
@@ -143,11 +143,12 @@ test("anything that is not exactly a recording is refused, with a reason", async
   assert.throws(() => decodeRecording(withByte(0, 0x58)), /first bytes/);
   assert.throws(() => decodeRecording(withByte(4, 9)), /format 9/);
   assert.throws(() => decodeRecording(withByte(8, 99)), /core ABI 99/);
-  assert.throws(() => decodeRecording(withByte(8, 1)), /core ABI 1, this build reads ABI 2 to 3/);
-  assert.throws(() => decodeRecording(withByte(8, 4)), /core ABI 4/);
-  // ABI 2 (before the terrain commands) is still read; ABI 3 is the current one.
+  assert.throws(() => decodeRecording(withByte(8, 1)), /core ABI 1, this build reads ABI 2 to 4/);
+  assert.throws(() => decodeRecording(withByte(8, 5)), /core ABI 5/);
+  // ABI 2 (before the terrain commands) and ABI 3 (before the thrusters) are still read; ABI 4 is the current one.
   assert.equal(decodeRecording(withByte(8, 2)).steps, 10);
   assert.equal(decodeRecording(withByte(8, 3)).steps, 10);
+  assert.equal(decodeRecording(withByte(8, 4)).steps, 10);
   assert.throws(() => decodeRecording(withByte(12, 32)), /32-byte records/);
   assert.throws(() => decodeRecording(good.slice(0, good.byteLength - 1)), /truncated/);
   const extra = new Uint8Array(good.byteLength + 1);

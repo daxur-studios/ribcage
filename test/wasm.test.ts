@@ -12,6 +12,8 @@ const HAND_BUILT_30 = 0xb62c7e7dd415f3a1n;
 const TERRAIN_ONLY = 0x424288d9b2e8abb4n;
 /** That terrain with a triangle and two lone nodes on it, after 120 steps (`TERRAIN_SCENE_120` in core/tests/ffi.rs). */
 const TERRAIN_SCENE_120 = 0x2bdef035f12d0c86n;
+/** A three-node craft with two thrusters and mid-run throttle changes, after 120 steps (`THRUST_SCENE_120` in core/tests/ffi.rs). */
+const THRUST_SCENE_120 = 0x765d0f4475514944n;
 /** End hash of the reported scene after 720 steps at the default rule (`cargo run --release -p beam-core --example bench`). */
 const STANDARD_BENCH_720 = 0x871092299f3cea56n;
 
@@ -98,6 +100,54 @@ test("ground contact on terrain gives the native hash", async () => {
   for (let i = 0; i < 120; i++) core.step(h);
   assert.equal(core.stateHash(h), TERRAIN_SCENE_120);
   assert.equal(core.events(h).length, 0);
+  core.hostFree(h);
+});
+
+test("a thrusting craft gives the native hash", async () => {
+  const core = await Core.load(loadBytes());
+  const h = core.hostNew();
+  const setup = new CommandBatch();
+  for (const [x, y, z, invMass] of [[0, 50, 0, 0.1], [1.5, 50, 0, 0.1], [0.75, 50, 1.3, 0.05]] as const) {
+    setup.addNode(x, y, z, invMass, 0.1);
+  }
+  for (const [a, b] of [[0, 1], [1, 2], [2, 0]]) {
+    setup.addBeam(a, b, { rest: 1.5, compliance: 1e-6, damping: 50, yieldStrain: 0.5, breakStrain: 1 });
+  }
+  setup.addThruster(0, 1, 400);
+  setup.addThruster(2, 1, 250);
+  setup.setThrottle(0, 1);
+  const first = core.applyCommands(h, setup);
+  assert.equal(first.rejected, 0);
+  assert.deepEqual([...first.results.slice(6, 8)], [0, 1], "thrusters are numbered in the order added");
+  for (let s = 0; s < 120; s++) {
+    if (s === 20 || s === 70) {
+      const more = new CommandBatch();
+      if (s === 20) more.setThrottle(1, 0.6);
+      else more.setThrottle(0, 0.3);
+      assert.equal(core.applyCommands(h, more).rejected, 0);
+    }
+    core.step(h);
+  }
+  assert.equal(core.stateHash(h), THRUST_SCENE_120);
+  assert.ok(core.positions(h)[0]! > 0.5, "the craft flew along +x");
+  core.hostFree(h);
+});
+
+test("a bad thruster record is rejected through the boundary and the rest applies", async () => {
+  const core = await Core.load(loadBytes());
+  const h = core.hostNew();
+  const b = new CommandBatch();
+  b.addNode(0, 10, 0, 0.1, 0.1);
+  b.addNode(1, 10, 0, 0.1, 0.1);
+  b.addThruster(0, 0, 100); // the same node twice
+  b.addThruster(0, 1, -1); // negative thrust
+  b.addThruster(0, 1, 100); // fine: thruster 0
+  b.setThrottle(0, 2); // above 1
+  b.setThrottle(5, 0.5); // no such thruster
+  b.setThrottle(0, 0.5); // fine
+  const r = core.applyCommands(h, b);
+  assert.deepEqual([...r.results], [0, 1, REJECTED, REJECTED, 0, REJECTED, REJECTED, 1]);
+  assert.equal(r.rejected, 4);
   core.hostFree(h);
 });
 

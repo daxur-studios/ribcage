@@ -66,7 +66,7 @@ Roadmap checks: "generated from parameters" in 4.3; "join at rings, saved and lo
   **Test:** load then save gives the same text, byte for byte; a loaded hopper gives the same command bytes as the one assembled in code, and the same state hash after 600 steps on the landing field; a file with an unknown field, an unknown part type, a later version, a bad join or a non-finite number is refused with a reason.
   Demo: skip.
 
-- [ ] **4.6 Thrusters in the core.** Build with: Sonnet.
+- [x] **4.6 Thrusters in the core.** Build with: Sonnet.
   `core/src/thrust.rs` (or inside `world.rs`): the thruster arrays (tail, head, maximum, throttle, flat, one per field), the two commands from "Settled" in `core/src/command.rs` and `src/commands.ts`, the force pass through `add_force` before the step, thrusters in the state hash, `ABI_VERSION` 4, the recording decoder accepting 2, 3 and 4.
   **Test:** two free nodes with a thruster between them, no gravity, accelerate at `T / (m_a + m_b)` within rounding along the head direction; throttle 0 gives no force; a deleted node turns its thruster off; bad records (same node twice, dead node, non-finite or negative thrust, throttle outside 0 to 1, unknown thruster) are rejected and the rest of the batch applies; the committed `weak-bridge.rcrd` (ABI 2) and `tower-collapse.rcrd` (ABI 3) replay to their hashes; a thrusting scene hashes the same natively and in WebAssembly.
   Demo: skip.
