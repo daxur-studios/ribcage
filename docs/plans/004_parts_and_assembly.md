@@ -61,7 +61,7 @@ Roadmap checks: "generated from parameters" in 4.3; "join at rings, saved and lo
   **Test:** the hopper assembles from its seven parts; node count is the sum of the parts minus the merged nodes, mass is the sum of the parts exactly, merged nodes sit within 1e-9 m of where both parts put them, the child's ring beams are gone and its seam beams are marked; each clock gives the expected rotation of a marked node; every refusal case is refused with its reason and changes nothing; the hopper stands on flat ground for 20 s with no yield and comes to rest, within the substep budget.
   Demo: skip.
 
-- [ ] **4.5 Craft file.** Build with: Sonnet.
+- [x] **4.5 Craft file.** Build with: Sonnet.
   `src/parts/craft-file.ts`: save and load as in "Settled", and `test/fixtures/hopper.craft.json` committed. Ticks the roadmap check "parts join at attachment rings into one craft, saved and loaded as a craft file".
   **Test:** load then save gives the same text, byte for byte; a loaded hopper gives the same command bytes as the one assembled in code, and the same state hash after 600 steps on the landing field; a file with an unknown field, an unknown part type, a later version, a bad join or a non-finite number is refused with a reason.
   Demo: skip.

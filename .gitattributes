@@ -1,0 +1,2 @@
+# Craft files are compared byte for byte by the tests, so they keep LF line endings on every checkout.
+*.craft.json text eol=lf

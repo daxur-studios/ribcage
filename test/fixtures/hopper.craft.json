@@ -1,0 +1,173 @@
+{
+  "format": "ribcage-craft",
+  "version": 1,
+  "root": "tank",
+  "place": {
+    "x": 0,
+    "y": 1.82,
+    "z": 0,
+    "yaw": 0
+  },
+  "parts": [
+    {
+      "id": "tank",
+      "type": "tank",
+      "params": {
+        "radius": 1,
+        "length": 2.5,
+        "ringNodes": 8,
+        "rings": 5,
+        "material": "aluminium",
+        "wallArea": 0.0005,
+        "mass": 2000
+      }
+    },
+    {
+      "id": "pod",
+      "type": "pod",
+      "params": {
+        "ringNodes": 8,
+        "bottomRadius": 1,
+        "topRadius": 0.6,
+        "height": 1.2,
+        "material": "aluminium",
+        "memberArea": 0.0004,
+        "mass": 1200
+      }
+    },
+    {
+      "id": "engine",
+      "type": "engine",
+      "params": {
+        "ringNodes": 8,
+        "topRadius": 1,
+        "nozzleRadius": 0.5,
+        "height": 1,
+        "material": "steel",
+        "memberArea": 0.0004,
+        "mass": 800,
+        "maxThrust": 80000
+      }
+    },
+    {
+      "id": "leg0",
+      "type": "leg",
+      "params": {
+        "length": 2.4,
+        "footOffset": 1.2,
+        "footSize": 0.35,
+        "mountWidth": 0.7653668647301797,
+        "mountHeight": 0.625,
+        "material": "aluminium",
+        "memberArea": 0.0002,
+        "mass": 150,
+        "sprungStiffness": 500000,
+        "sprungStroke": 0.12,
+        "crushForce": 45000,
+        "crushStroke": 0.3,
+        "bodyWidth": 0.7
+      }
+    },
+    {
+      "id": "leg1",
+      "type": "leg",
+      "params": {
+        "length": 2.4,
+        "footOffset": 1.2,
+        "footSize": 0.35,
+        "mountWidth": 0.7653668647301797,
+        "mountHeight": 0.625,
+        "material": "aluminium",
+        "memberArea": 0.0002,
+        "mass": 150,
+        "sprungStiffness": 500000,
+        "sprungStroke": 0.12,
+        "crushForce": 45000,
+        "crushStroke": 0.3,
+        "bodyWidth": 0.7
+      }
+    },
+    {
+      "id": "leg2",
+      "type": "leg",
+      "params": {
+        "length": 2.4,
+        "footOffset": 1.2,
+        "footSize": 0.35,
+        "mountWidth": 0.7653668647301797,
+        "mountHeight": 0.625,
+        "material": "aluminium",
+        "memberArea": 0.0002,
+        "mass": 150,
+        "sprungStiffness": 500000,
+        "sprungStroke": 0.12,
+        "crushForce": 45000,
+        "crushStroke": 0.3,
+        "bodyWidth": 0.7
+      }
+    },
+    {
+      "id": "leg3",
+      "type": "leg",
+      "params": {
+        "length": 2.4,
+        "footOffset": 1.2,
+        "footSize": 0.35,
+        "mountWidth": 0.7653668647301797,
+        "mountHeight": 0.625,
+        "material": "aluminium",
+        "memberArea": 0.0002,
+        "mass": 150,
+        "sprungStiffness": 500000,
+        "sprungStroke": 0.12,
+        "crushForce": 45000,
+        "crushStroke": 0.3,
+        "bodyWidth": 0.7
+      }
+    }
+  ],
+  "joins": [
+    {
+      "child": "pod",
+      "childPort": "bottom",
+      "parent": "tank",
+      "parentPort": "top",
+      "clock": 0
+    },
+    {
+      "child": "engine",
+      "childPort": "top",
+      "parent": "tank",
+      "parentPort": "bottom",
+      "clock": 0
+    },
+    {
+      "child": "leg0",
+      "childPort": "mount",
+      "parent": "tank",
+      "parentPort": "side-0-0",
+      "clock": 0
+    },
+    {
+      "child": "leg1",
+      "childPort": "mount",
+      "parent": "tank",
+      "parentPort": "side-0-2",
+      "clock": 0
+    },
+    {
+      "child": "leg2",
+      "childPort": "mount",
+      "parent": "tank",
+      "parentPort": "side-0-4",
+      "clock": 0
+    },
+    {
+      "child": "leg3",
+      "childPort": "mount",
+      "parent": "tank",
+      "parentPort": "side-0-6",
+      "clock": 0
+    }
+  ]
+}
