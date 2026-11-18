@@ -54,7 +54,7 @@ Roadmap checks: "rigid bodies with anchors carry engines, pods and wheels" in 5.
   **Test:** a body in free fall follows `½ g t²` to rounding and keeps its spin; a body spinning about each principal axis and about a tilted axis keeps angular momentum and energy over ten simulated minutes (bounded drift, stated); a tumbling slab (intermediate axis) stays bounded with no energy gain; making rigid a moving, spinning, bent lattice keeps linear and angular momentum to rounding, never raises kinetic energy, and moves no node; releasing it keeps momentum, spin and kinetic energy to rounding and moves no node; make then release in the same step is the identity on momentum; a body hashes identically twice and natively against WebAssembly; the three goldens replay.
   Demo: skip.
 
-- [ ] **5.3 Riding endpoints in the one kernel.** Build with: **Opus** (changes the correction every beam and contact shares).
+- [x] **5.3 Riding endpoints in the one kernel.** Build with: **Opus** (changes the correction every beam and contact shares).
   `Endpoint::Riding` in `core/src/solver.rs` (weight and correction from "Settled"), used by beams, beam damping, ground contacts and beam-midpoint contacts; beams with both ends on one body skipped when the island is packed; islands join a body's riding nodes; the substep rule through the same weight.
   **Test:** a live pendulum hung from a pinned heavy body matches the same pendulum on a pin; a light chain (6.6 kg links) hung from a free body of 800 kg, and from a pin, settles to the same stretch within a stated tolerance and the same substep count (the mass-ratio measurement, logged); a rigid cube dropped on flat ground bounces and rests like the same cube as a stiff lattice (rest height within its radius, no energy gain at rest over 60 s); a body resting on four corner contacts does not creep or spin; a beam between a riding node and a live node yields and breaks at the same force as between two live nodes; momentum of a body plus live lattice with no external force is constant to rounding; the three goldens replay.
   Demo: skip.
@@ -121,5 +121,5 @@ Roadmap checks: "rigid bodies with anchors carry engines, pods and wheels" in 5.
 ## Open questions
 
 - [ ] Does a steady resting contact really let the legs sleep without missing the start of a hard landing (5.8 and 5.9 decide)?
-- [ ] Is an effective-mass rule at seams needed on top of the craft node-mass budget (5.3 and 5.4 decide)?
+- [ ] Is an effective-mass rule at seams needed on top of the craft node-mass budget (5.3 and 5.4 decide)? 5.3: not at 800 kg : 6.6 kg; a chain on a free heavy body settles like one on a pin (2.5e-11 relative) at the same substep count (ER 005, phase 5.3). 5.4 checks the hopper's seams.
 - [x] Does the explicit spin term with a clamp hold energy on fast-tumbling debris, or is the implicit form needed (5.2 decides)? No: explicit with a clamp pumps energy up to the clamp, plain implicit bleeds spin; the implicit midpoint (Cayley) form keeps both to rounding and is the default (ER 005, phase 5.2).

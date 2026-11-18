@@ -127,3 +127,46 @@ Built by Opus. `cargo test`, `pnpm test` (225 pass, 1 skipped: the existing repo
 ### For 5.3
 
 5.3 (Opus) can start from the files alone. `predict_body` and `derive_body` in `core/src/body.rs` are already split per substep in delta form, so moving them into the island substep loop (a body joining the island of the live nodes it touches) is a move, not a rewrite; `body_prev_*` holds the predicted pose for the riding-endpoint correction. Beams to riders are packed today as fixed ends (`inv_mass` 0) in `core/src/island.rs`; `Endpoint::Riding` replaces that.
+
+## 2026-11-18 (phase 5.3: riding endpoints in the one kernel)
+
+Built by Opus. `cargo test` (debug and release), `pnpm test` (225 pass, 1 skipped: the existing reported-benchmark skip) and `pnpm typecheck` pass. The three goldens replay to their hashes, the live hop still ends at `0xd92f2aad01c0e048` at step 1320, and a world with no body hashes exactly as before. New tests are in `core/tests/riding.rs`; `core/tests/midpoint.rs` follows the new endpoint API.
+
+### Formulas as built
+
+- **[decision]** **`Endpoint::Riding(body, local)`** in `core/src/solver.rs`, the fourth case of the one kernel. With `r = R · local` and push direction `n`, weight `w = 1/M + (r × n) · I⁻¹ (r × n)` with the world inverse inertia `I⁻¹ = R I_b⁻¹ Rᵀ` (applied as rotate, body-frame multiply, rotate back; no matrix built). A push `p = n Δλ` moves the centre by `p / M` and turns the body by `Δθ = I⁻¹ (r × p)` as a first-order quaternion push `q ← normalize(q + ½ (0, Δθ) ⊗ q)`. Beams, beam damping, ground contacts and beam-midpoint contacts (`Endpoint::Point` with a riding end shares through the body) all go through it.
+- **[decision]** **Bodies in the island substep loop.** `predict_body` and `derive_body` run per substep inside the island, around the constraint passes. A body joins the island of the live nodes it touches (every riding node of one body is joined); a body with no live neighbour is an island of its own. Beams with both ends on one body are skipped when the island is packed; packing riders as fixed ends (`inv_mass` 0) is gone.
+- **[decision]** **Substep rule through the same weight.** A beam to a riding node is rated by the riding weight, so a light live node on a heavy body is rated by the live node. A lone body takes `MIN_SUBSTEPS` (4), or `n` under `Fixed(n)`.
+- **[decision]** **Contacts in two passes: all pushes, then all friction** (`push_ground_contact`, then `ground_friction`). Interleaving push and friction per contact let a body resting on four corners creep 0.117 m over 60 s, because each corner's friction saw the body already turned by the next corner's push. Alternating the contact order each substep was tried and rejected: it turned the rocking into yaw. Node-only worlds give the same bits as before (a node's friction does not depend on another node's push).
+- **[decision]** **Friction uses the riding weight along the slip direction**, not along the normal.
+- **[decision]** **Damping kicks both the body's velocity and its spin** (`V += p / M`, `ω += I⁻¹ (r × p)`), so a damped beam to a body removes energy from both.
+- **[decision]** **Split recovery also shifts the body's predicted pose**, so a contact's penetration recovery does not reappear as velocity in `derive_body`.
+- **[decision]** **The body speed clamp sits in the island loop**, after derive, as for nodes.
+- **[decision]** **A body freeze reports the island root** (`EVENT_FREEZE` index), the same contract as a live island.
+- **[decision]** **Riders are placed once per step, before the break check**, so a beam's strain to a riding node is measured at the body's final pose.
+- **[decision]** **The 5.2 spin term is unchanged** (implicit midpoint, 100 rad/s clamp).
+
+### Measured
+
+- **[finding]** **Pendulum.** A live pendulum hung from a pinned heavy body against the same pendulum on a pin: positions differ by at most 9.1e-6 m over 3 s, both at 32 substeps.
+- **[finding]** **Mass ratio 800 kg : 6.6 kg.** A light chain hung from a free 800 kg body settles to a stretch of 4.787279999672e-3 m; on a pin, 4.787279999791e-3 m (2.5e-11 relative). Both use 10 substeps; the body drifts 2.6e-4 m. XPBD statics adds up to `h² w` to the compliance, so the test brackets the pin's stretch between the two rather than asserting equality.
+- **[finding]** **The open question, 5.3's part.** At 800 : 6.6 (effective ratio over 120) a body converges like a pin, to rounding, at the same substep count. 5.3 shows no need for an effective-mass rule at seams on top of the craft node-mass budget. 5.4 reports the effective ratio at each real hopper seam and closes the question.
+- **[finding]** **Cube drop.** The rigid cube and the same cube as a stiff lattice touch down on the same step (24). Rebound: 6.3 cm rigid, 18 cm lattice. Rest height 0.60004 m rigid, 0.59999 m lattice (both within the radius). Energy gain at rest over 60 s: 4e-14 J.
+- **[finding]** **Four corners.** Creep 3.1e-11 m and yaw 3.8e-11 rad over 60 s (was 0.117 m before the two-pass contacts).
+- **[finding]** **Yield and break.** A beam from a riding end to a live end and one between two live ends both yield at 1902 N and break at 1928 N.
+- **[finding]** **Momentum.** A body plus a live lattice with no external force: worst drift 91 rounding units over 10 s. It wanders rather than grows and scales with distance from the origin, so it is rounding. The test bound is 1000 rounding units.
+- **[finding]** **`Fixed(n)` with a body** (left unchecked by 5.2). The body centre is off the 32-substep run by 13.5 cm at 1 substep, 6.9 cm at 4 and 4.5 cm at 8; no step froze. The test checks that the gap shrinks as the count rises.
+- **[finding]** **Native against WebAssembly body scene.** The beam from node 1 to node 8 now pushes the body, so the scene changes: `BODY_SCENE_61` `0x9959877922115153` → `0x06024ffac786af7b`, `BODY_SCENE_120` `0xf58545641d0a5073` → `0x722722cfee9354f3`. Updated in `core/tests/ffi.rs` and `test/wasm.test.ts`; Rust and WebAssembly agree.
+
+### Not checked
+
+- **[assumption]** The lattice cube rebounds 18 cm against 6.3 cm for the rigid cube. It is not beam damping (600 → 6000 changed the rebound by under 5%); the cause is not traced. The test only checks that both bounce and keep less than a third of the fall. 5.9 (equivalence) should look at it.
+- **[assumption]** The body bad-number guard path is still not driven by a test.
+- **[assumption]** No timing with many bodies or bodies with many riders.
+- **[assumption]** Joints through the riding endpoint are 5.5; not exercised here.
+- **[assumption]** Not run in the browser: the page draws no body yet.
+- **[oracle-candidate]** Why does a stiff lattice cube keep about three times the rebound of the same cube rigid, when damping is not the cause?
+
+### For 5.4
+
+5.4 (Opus) can start from the files alone. Every beam and contact to a body goes through `Endpoint::Riding`; `CMD_MAKE_RIGID` on the never-live segments at spawn is all `compileCraft(..., { rigid: true })` needs to send. Report the effective mass `1 / w` at each seam node along each seam beam and compare with the 800 : 6.6 case measured here; if every seam is at or below that ratio, close the open question with "no rule needed".

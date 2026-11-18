@@ -1,14 +1,18 @@
 //! The packed island buffer (layout rule 5): live nodes and live beams copied in ascending
 //! index order, beam endpoints rewritten as positions in the packed arrays. The solver
-//! ([`crate::solver`]) is a pure function of this buffer. Islands are connected components of movable nodes ([`build_islands`]).
+//! ([`crate::solver`]) is a pure function of this buffer. Islands are connected components of
+//! movable nodes and rigid bodies ([`build_islands`]). A body is packed with the island of the
+//! live nodes it touches, with its riders and its own pose (phase 5.3).
 
-use crate::body::NO_BODY;
+use crate::body::{SpinForm, NO_BODY};
+use crate::maths::{Quat, Sym3};
 use crate::real::{Real, Vec3};
 use crate::world::{World, NODE_ALIVE};
 
 #[derive(Default, Debug, PartialEq)]
 pub struct Island {
-    /// Lowest movable node's world index (`u32::MAX` for the island of pinned-only beams).
+    /// Lowest movable or riding node's world index (`u32::MAX` for the island of pinned-only
+    /// beams).
     pub root: u32,
     /// Set by the step when the island holds a frozen node and was not solved (not copied back).
     pub skipped: bool,
@@ -20,6 +24,11 @@ pub struct Island {
     pub force: Vec<Vec3>,
     /// Contact sphere radius (ground contact, plan 003).
     pub radius: Vec<Real>,
+    /// Packed body the node rides, or [`NO_BODY`]. A rider's `inv_mass` here is zero: the
+    /// solve moves it only through its body.
+    pub node_body: Vec<u32>,
+    /// A rider's offset from its body's centre, body frame (zero for a loose node).
+    pub offset: Vec<Vec3>,
     // Per packed beam, ascending world index. Endpoints are packed node positions.
     pub beam_world: Vec<u32>,
     pub beam_a: Vec<u32>,
@@ -44,26 +53,61 @@ pub struct Island {
     pub beam_contact_offset: Vec<Real>,
     /// The ground's friction coefficient `μ` for this step's contacts.
     pub friction: Real,
+    // Per packed body (phase 5.3), ascending slot. Velocities world frame, inertia body frame.
+    pub body_world: Vec<u32>,
+    pub body_centre: Vec<Vec3>,
+    pub body_rot: Vec<Quat>,
+    pub body_vel: Vec<Vec3>,
+    pub body_omega: Vec<Vec3>,
+    pub body_mass: Vec<Real>,
+    /// `1 / M`.
+    pub body_inv_mass: Vec<Real>,
+    pub body_inertia: Vec<Sym3>,
+    pub body_inv_inertia: Vec<Sym3>,
+    /// The step's external force and torque (about the centre at the step's start), summed
+    /// over the riders in ascending node order.
+    pub body_force: Vec<Vec3>,
+    pub body_torque: Vec<Vec3>,
+    /// The pose the last prediction left, which the body's velocity is derived against.
+    pub body_pred_centre: Vec<Vec3>,
+    pub body_pred_rot: Vec<Quat>,
+    /// The world's spin integrator and angular speed limit, for the bodies' prediction.
+    pub spin_form: SpinForm,
+    pub max_angular_speed: Real,
 }
 
-/// The island split: connected components of movable nodes.
+impl Island {
+    /// Packed node `i` rides a body.
+    #[inline(always)]
+    pub fn rides(&self, i: usize) -> bool {
+        self.node_body.get(i).is_some_and(|&b| b != NO_BODY)
+    }
+}
+
+/// The island split: connected components of movable nodes and rigid bodies.
 ///
 /// - Two movable nodes are in one island when a live beam joins them, directly or through other
 ///   movable nodes. A pinned node (inverse mass zero) never joins islands: it is copied into
 ///   every island that has a beam to it and is never moved.
-/// - Islands are ordered by their lowest movable node index (`root`). Inside an island, nodes
-///   and beams are in ascending world index order (pinned nodes among them).
-/// - A movable node with no beams is an island of its own.
+/// - A node riding a rigid body (phase 5.3) joins as a movable node does, and every rider of
+///   one body is in one island, so a body is in the island of the live nodes its riders have
+///   beams to. A beam with both ends on one body is not packed at all: the body is rigid.
+/// - Islands are ordered by their lowest movable or riding node index (`root`). Inside an
+///   island, nodes and beams are in ascending world index order (pinned nodes among them), and
+///   bodies in ascending slot order.
+/// - A movable node with no beams is an island of its own; so is a body with no beam out.
 /// - Live beams whose two ends are both pinned belong to no component. If there are any they
 ///   form one extra island after all the others (`root` is `u32::MAX`, no movable node).
 ///
-/// Union-find with the smaller index as root, so the root is the lowest movable index of the
+/// Union-find with the smaller index as root, so the root is the lowest joining index of the
 /// component and no hashing or iteration order enters. Rebuilt every step.
 pub fn build_islands(world: &World) -> Vec<Island> {
     let n = world.node_count() as usize;
-    // A node riding a rigid body (plan 005) is not movable: the body moves it, once per step.
-    let movable = |i: usize| world.node_flags[i] & NODE_ALIVE != 0 && world.inv_mass[i] != 0.0 && world.node_body[i] == NO_BODY;
-    let riding = |i: usize| world.node_body[i] != NO_BODY;
+    // A node riding a rigid body joins as a movable node does; the solve moves it through its
+    // body. Two ends on one body: a beam inside the body, never packed.
+    let movable =
+        |i: usize| world.node_flags[i] & NODE_ALIVE != 0 && (world.node_body[i] != NO_BODY || world.inv_mass[i] != 0.0);
+    let inside = |a: usize, c: usize| world.node_body[a] != NO_BODY && world.node_body[a] == world.node_body[c];
     let mut parent: Vec<u32> = (0..n as u32).collect();
     fn find(parent: &mut [u32], mut x: u32) -> u32 {
         while parent[x as usize] != x {
@@ -73,16 +117,31 @@ pub fn build_islands(world: &World) -> Vec<Island> {
         }
         x
     }
+    fn union(parent: &mut [u32], a: u32, c: u32) {
+        let (ra, rc) = (find(parent, a), find(parent, c));
+        if ra != rc {
+            parent[ra.max(rc) as usize] = ra.min(rc);
+        }
+    }
+    // Every rider of a body with the body's lowest rider, in node order.
+    let mut first_rider = vec![u32::MAX; world.body_slot_count() as usize];
+    for i in 0..n {
+        let s = world.node_body[i];
+        if s != NO_BODY && movable(i) {
+            if first_rider[s as usize] == u32::MAX {
+                first_rider[s as usize] = i as u32;
+            } else {
+                union(&mut parent, first_rider[s as usize], i as u32);
+            }
+        }
+    }
     for b in 0..world.beam_count() {
         if !world.beam_alive(b) {
             continue;
         }
         let (a, c) = (world.beam_a[b as usize] as usize, world.beam_b[b as usize] as usize);
-        if movable(a) && movable(c) {
-            let (ra, rc) = (find(&mut parent, a as u32), find(&mut parent, c as u32));
-            if ra != rc {
-                parent[ra.max(rc) as usize] = ra.min(rc);
-            }
+        if movable(a) && movable(c) && !inside(a, c) {
+            union(&mut parent, a as u32, c as u32);
         }
     }
     // Island ids in ascending root order; roots are visited in ascending index.
@@ -109,6 +168,9 @@ pub fn build_islands(world: &World) -> Vec<Island> {
             continue;
         }
         let (a, c) = (world.beam_a[b as usize], world.beam_b[b as usize]);
+        if inside(a as usize, c as usize) {
+            continue; // the body is rigid: a beam inside it carries nothing
+        }
         let home = if movable(a as usize) {
             Some(a)
         } else if movable(c as usize) {
@@ -127,8 +189,6 @@ pub fn build_islands(world: &World) -> Vec<Island> {
                     }
                 }
             }
-            // A beam inside a body (or from a body to a pin) is not solved: the body is rigid.
-            None if riding(a as usize) || riding(c as usize) => {}
             None => {
                 fixed_beams.push(b);
                 fixed_nodes.push(a);
@@ -153,19 +213,57 @@ pub fn build_islands(world: &World) -> Vec<Island> {
     islands
 }
 
-/// Copies the listed nodes and beams (both ascending) into one packed island.
+/// Copies the listed nodes and beams (both ascending), and the bodies the nodes ride
+/// (ascending slot), into one packed island.
 fn pack(world: &World, nodes: &[u32], beams: &[u32], packed: &mut [u32], root: u32) -> Island {
-    let mut island = Island { root, ..Island::default() };
+    let mut island = Island {
+        root,
+        spin_form: world.spin_form,
+        max_angular_speed: world.max_angular_speed,
+        ..Island::default()
+    };
+    let mut slots: Vec<u32> = nodes.iter().map(|&i| world.node_body[i as usize]).filter(|&s| s != NO_BODY).collect();
+    slots.sort_unstable();
+    slots.dedup();
+    for &s in &slots {
+        let u = s as usize;
+        island.body_world.push(s);
+        island.body_centre.push(world.body_centre[u]);
+        island.body_rot.push(world.body_rot[u]);
+        island.body_vel.push(world.body_vel[u]);
+        island.body_omega.push(world.body_omega[u]);
+        island.body_mass.push(world.body_mass[u]);
+        island.body_inv_mass.push(1.0 / world.body_mass[u]);
+        island.body_inertia.push(world.body_inertia[u]);
+        island.body_inv_inertia.push(world.body_inv_inertia[u]);
+        island.body_force.push(Vec3::ZERO);
+        island.body_torque.push(Vec3::ZERO);
+        island.body_pred_centre.push(world.body_prev_centre[u]);
+        island.body_pred_rot.push(world.body_prev_rot[u]);
+    }
     for &i in nodes {
         let u = i as usize;
         packed[u] = island.node_world.len() as u32;
         island.node_world.push(i);
         island.pos.push(world.pos[u]);
         island.vel.push(world.vel[u]);
-        // A rider is a fixed end to the island (phase 5.2: beams do not push bodies yet).
-        island.inv_mass.push(if world.node_body[u] != NO_BODY { 0.0 } else { world.inv_mass[u] });
         island.force.push(world.force[u]);
         island.radius.push(world.radius[u]);
+        let s = world.node_body[u];
+        if s == NO_BODY {
+            island.inv_mass.push(world.inv_mass[u]);
+            island.node_body.push(NO_BODY);
+            island.offset.push(Vec3::ZERO);
+        } else {
+            // A rider: its mass is in its body, which takes its force and the force's torque.
+            let b = slots.binary_search(&s).expect("a rider's body is packed");
+            let f = world.force[u];
+            island.inv_mass.push(0.0);
+            island.node_body.push(b as u32);
+            island.offset.push(world.node_offset[u]);
+            island.body_force[b] = island.body_force[b] + f;
+            island.body_torque[b] = island.body_torque[b] + (world.pos[u] - island.body_centre[b]).cross(f);
+        }
     }
     for &b in beams {
         let u = b as usize;
@@ -194,5 +292,14 @@ pub fn copy_back(world: &mut World, island: &Island) {
         world.rest[w as usize] = island.rest[p];
         world.beam_flags[w as usize] = island.beam_flags[p];
         world.last_lambda[w as usize] = island.last_lambda[p];
+    }
+    for (p, &s) in island.body_world.iter().enumerate() {
+        let s = s as usize;
+        world.body_centre[s] = island.body_centre[p];
+        world.body_rot[s] = island.body_rot[p];
+        world.body_vel[s] = island.body_vel[p];
+        world.body_omega[s] = island.body_omega[p];
+        world.body_prev_centre[s] = island.body_pred_centre[p];
+        world.body_prev_rot[s] = island.body_pred_rot[p];
     }
 }

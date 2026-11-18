@@ -10,13 +10,28 @@
 //! pass a node faster than `max_speed` is clamped ([`solve_island`]), and a non-finite position
 //! or velocity freezes the island ([`SolveOutput::frozen`]).
 
+use crate::body::{derive_body, predict_body, NO_BODY};
 use crate::event::{Event, EVENT_FREEZE};
 use crate::failure::check_failure;
 use crate::island::Island;
+use crate::maths::{Quat, Sym3};
 use crate::real::{Real, Vec3};
 use crate::sim::gravity_at;
 use crate::world::BEAM_YIELDED;
 use crate::STEP_SECONDS;
+
+/// The island's [`Mass`], borrowed field by field so the solve can move positions beside it.
+macro_rules! mass {
+    ($isl:expr) => {
+        Mass {
+            node: &$isl.inv_mass,
+            node_body: &$isl.node_body,
+            offset: &$isl.offset,
+            body: &$isl.body_inv_mass,
+            inertia: &$isl.body_inv_inertia,
+        }
+    };
+}
 
 /// Substep rule constant: the count is the smallest `n` with `ω_max · h ≤ SUBSTEP_C`.
 /// Measured in phase 1.4: every scene measured stays bounded past `c = 2.5` (the test
@@ -32,7 +47,7 @@ pub const MAX_SUBSTEPS: u32 = 32;
 
 /// The rule-based substep count for one island (deterministic mode).
 ///
-/// For each beam `ω² = stiffness · (inverse mass a + inverse mass b)`, with stiffness
+/// For each beam `ω² = stiffness · (weight a + weight b)`, with stiffness
 /// `1 / compliance`. The count is the smallest `n` in `MIN..=MAX` with `ω_max · h ≤ c`,
 /// where `h = STEP_SECONDS / n`. A beam with zero compliance (infinitely stiff) between
 /// movable nodes asks for the maximum. A beam between two pinned nodes asks for nothing.
@@ -59,8 +74,18 @@ impl SubstepRule {
 pub fn substep_count_with(isl: &Island, rule: SubstepRule) -> u32 {
     let max = rule.max.max(MIN_SUBSTEPS);
     let mut omega2_max: Real = 0.0;
+    let m = mass!(isl);
     for k in 0..isl.beam_a.len() {
-        let w = isl.inv_mass[isl.beam_a[k] as usize] + isl.inv_mass[isl.beam_b[k] as usize];
+        let w = match (m.end(isl.beam_a[k]), m.end(isl.beam_b[k])) {
+            (Endpoint::Node(a), Endpoint::Node(b)) => isl.inv_mass[a as usize] + isl.inv_mass[b as usize],
+            // A riding end weighs by the beam's direction at the step's start (phase 5.3).
+            (a, b) => {
+                let d = b.place(&m, &isl.pos, &isl.body_centre, &isl.body_rot) - a.place(&m, &isl.pos, &isl.body_centre, &isl.body_rot);
+                let len = d.length();
+                let dir = if len > 0.0 { d / len } else { Vec3::ZERO };
+                a.weight(&m, &isl.body_rot, dir) + b.weight(&m, &isl.body_rot, dir)
+            }
+        };
         if w == 0.0 {
             continue;
         }
@@ -81,61 +106,208 @@ pub fn substep_count_with(isl: &Island, rule: SubstepRule) -> u32 {
     n
 }
 
-/// One end of a correction (layout rule 6). Beams have two `Node` ends; a ground contact has a
-/// `Fixed` end (the ground, which never moves) and a `Node` end or, from phase 3.3, a `Point`
-/// on a beam. Milestone 5 adds a node riding on a rigid body; it only changes
+/// What the kernel reads to weigh an end: inverse masses of the packed nodes and bodies, and
+/// which body each packed node rides (layout rule 6). A rider's own inverse mass is zero in
+/// `node`: its mass is in its body. `node_body` may be empty (no bodies: every node is loose).
+#[derive(Clone, Copy)]
+pub struct Mass<'a> {
+    /// Inverse mass per packed node (zero for pinned nodes and riders).
+    pub node: &'a [Real],
+    /// Packed body each node rides, or [`NO_BODY`]. Empty when nothing rides.
+    pub node_body: &'a [u32],
+    /// A rider's offset from its body's centre, body frame (per packed node).
+    pub offset: &'a [Vec3],
+    /// Inverse mass per packed body, `1 / M`.
+    pub body: &'a [Real],
+    /// Inverse inertia per packed body, body frame.
+    pub inertia: &'a [Sym3],
+}
+
+impl<'a> Mass<'a> {
+    /// Loose nodes only, no bodies.
+    pub fn nodes(inv_mass: &'a [Real]) -> Mass<'a> {
+        Mass { node: inv_mass, node_body: &[], offset: &[], body: &[], inertia: &[] }
+    }
+
+    /// The end packed node `i` is: a point of its body ([`Endpoint::Riding`]) or itself.
+    #[inline(always)]
+    pub fn end(&self, i: u32) -> Endpoint {
+        match self.node_body.get(i as usize) {
+            Some(&b) if b != NO_BODY => Endpoint::Riding(b, self.offset[i as usize]),
+            _ => Endpoint::Node(i),
+        }
+    }
+}
+
+/// Positions the kernel moves: the packed nodes, and the bodies' centres and rotations.
+pub struct Pose<'a> {
+    pub pos: &'a mut [Vec3],
+    pub centre: &'a mut [Vec3],
+    pub rot: &'a mut [Quat],
+}
+
+impl<'a> Pose<'a> {
+    /// Loose nodes only, no bodies.
+    pub fn nodes(pos: &'a mut [Vec3]) -> Pose<'a> {
+        Pose { pos, centre: &mut [], rot: &mut [] }
+    }
+}
+
+/// Velocities the damping pass changes: the packed nodes', and the bodies' linear and angular.
+pub struct Vel<'a> {
+    pub node: &'a mut [Vec3],
+    pub lin: &'a mut [Vec3],
+    pub ang: &'a mut [Vec3],
+}
+
+/// One end of a correction (layout rule 6). A beam has two node or riding ends; a ground
+/// contact has a `Fixed` end (the ground, which never moves) and a node, a riding point or,
+/// from phase 3.3, a `Point` on a beam. A riding end (phase 5.3) only changes
 /// [`Endpoint::weight`] and how the end moves, never the callers' maths.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Endpoint {
-    /// A packed node: moves by its own inverse mass.
+    /// A packed loose node: moves by its own inverse mass.
     Node(u32),
     /// Static ground: infinite mass, never moved.
     Fixed,
     /// The point `(1 - t) · p_a + t · p_b` on the beam between packed nodes `a` and `b`. With
     /// `b_a = 1 - t` and `b_b = t` it resists a push by `b_a² · w_a + b_b² · w_b`, and a push of
-    /// `Δλ` moves node `i` by `b_i · w_i · Δλ`, so the point itself moves by `weight · Δλ`.
+    /// `Δλ` moves node `i` by `b_i · w_i · Δλ`, so the point itself moves by `weight · Δλ`. A
+    /// part that rides a body takes its share through the body, as [`Endpoint::Riding`].
     Point(u32, u32, Real),
+    /// The point at `local` (body frame, from the centre) on packed body `b` (phase 5.3). With
+    /// `r = R · local` and the push along unit `n` it resists by
+    /// `w = 1/M + (r × n) · I⁻¹ (r × n)`, `I⁻¹ = R I_b⁻¹ Rᵀ`. A push `p = n · Δλ` moves the
+    /// centre by `p / M` and turns the body by `Δθ = I⁻¹ (r × p)`, applied as
+    /// `q ← normalize(q + ½ (0, Δθ) ⊗ q)`, so to first order the point moves by `w · Δλ` along
+    /// `n`, as a node would.
+    Riding(u32, Vec3),
+}
+
+/// World-frame `I⁻¹ v` of packed body `b` at rotation `q`: `R I_b⁻¹ Rᵀ v`, no matrix built.
+#[inline(always)]
+fn turn(m: &Mass, q: Quat, b: usize, v: Vec3) -> Vec3 {
+    q.rotate(m.inertia[b].mul_vec(q.inv_rotate(v)))
 }
 
 impl Endpoint {
-    /// The end's resistance to a push: how far it moves per unit of `Δλ`.
+    /// The end's resistance to a push along unit `dir`: how far it moves per unit of `Δλ`.
+    /// Only a riding end depends on `dir`.
     #[inline(always)]
-    pub fn weight(self, inv_mass: &[Real]) -> Real {
+    pub fn weight(self, m: &Mass, rot: &[Quat], dir: Vec3) -> Real {
         match self {
-            Endpoint::Node(i) => inv_mass[i as usize],
+            Endpoint::Node(i) => m.node[i as usize],
             Endpoint::Fixed => 0.0,
             Endpoint::Point(a, b, t) => {
                 let (ba, bb) = (1.0 - t, t);
-                ba * ba * inv_mass[a as usize] + bb * bb * inv_mass[b as usize]
+                ba * ba * m.end(a).weight(m, rot, dir) + bb * bb * m.end(b).weight(m, rot, dir)
+            }
+            Endpoint::Riding(b, local) => {
+                let b = b as usize;
+                let q = rot[b];
+                let u = q.inv_rotate(q.rotate(local).cross(dir));
+                m.body[b] + u.dot(m.inertia[b].mul_vec(u))
             }
         }
     }
 
-    /// Where the end is in `pos` (the ground has no place of its own: zero).
+    /// The end is, or has a part, riding a body.
     #[inline(always)]
-    pub fn place(self, pos: &[Vec3]) -> Vec3 {
+    pub fn touches_body(self, m: &Mass) -> bool {
         match self {
-            Endpoint::Node(i) => pos[i as usize],
-            Endpoint::Fixed => Vec3::ZERO,
-            Endpoint::Point(a, b, t) => pos[a as usize] * (1.0 - t) + pos[b as usize] * t,
+            Endpoint::Riding(..) => true,
+            Endpoint::Point(a, b, _) => m.end(a).touches_body(m) || m.end(b).touches_body(m),
+            _ => false,
         }
     }
 
-    /// Moves the end's nodes by `dir · (b_i · w_i · dl)`, added when `plus` is set, else taken.
+    /// Where the end is (the ground has no place of its own: zero).
     #[inline(always)]
-    fn shift(self, pos: &mut [Vec3], inv_mass: &[Real], dir: Vec3, dl: Real, plus: bool) {
+    pub fn place(self, m: &Mass, pos: &[Vec3], centre: &[Vec3], rot: &[Quat]) -> Vec3 {
+        match self {
+            Endpoint::Node(i) => pos[i as usize],
+            Endpoint::Fixed => Vec3::ZERO,
+            Endpoint::Point(a, b, t) => {
+                m.end(a).place(m, pos, centre, rot) * (1.0 - t) + m.end(b).place(m, pos, centre, rot) * t
+            }
+            Endpoint::Riding(b, local) => centre[b as usize] + rot[b as usize].rotate(local),
+        }
+    }
+
+    /// Moves the end by a push of `dir · dl`, added when `plus` is set, else taken: a node by
+    /// `dir · (b_i · w_i · dl)`, a body as [`Endpoint::Riding`] says. With `nodes` clear only
+    /// bodies move (a contact's recovery shared into the bodies' predicted pose).
+    #[inline(always)]
+    fn shift(self, s: &mut Pose, m: &Mass, dir: Vec3, dl: Real, plus: bool, nodes: bool) {
+        match self {
+            Endpoint::Fixed => {}
+            Endpoint::Node(i) => {
+                if nodes {
+                    let i = i as usize;
+                    let d = dir * (m.node[i] * dl);
+                    s.pos[i] = if plus { s.pos[i] + d } else { s.pos[i] - d };
+                }
+            }
+            Endpoint::Point(a, b, t) => {
+                for (i, share) in [(a, 1.0 - t), (b, t)] {
+                    match m.end(i) {
+                        Endpoint::Node(i) => {
+                            if nodes {
+                                let i = i as usize;
+                                let d = dir * (share * m.node[i] * dl);
+                                s.pos[i] = if plus { s.pos[i] + d } else { s.pos[i] - d };
+                            }
+                        }
+                        ride => ride.shift(s, m, dir, share * dl, plus, nodes),
+                    }
+                }
+            }
+            Endpoint::Riding(b, local) => {
+                let b = b as usize;
+                let q = s.rot[b];
+                let p = if plus { dir * dl } else { dir * -dl };
+                let dt = turn(m, q, b, q.rotate(local).cross(p));
+                s.centre[b] = s.centre[b] + p * m.body[b];
+                let d = Quat::new(0.0, dt.x, dt.y, dt.z).mul(q);
+                s.rot[b] = Quat::new(q.w + 0.5 * d.w, q.x + 0.5 * d.x, q.y + 0.5 * d.y, q.z + 0.5 * d.z).normalize();
+            }
+        }
+    }
+
+    /// The end's velocity (a riding point's is `V + ω × r`).
+    #[inline(always)]
+    fn velocity(self, m: &Mass, rot: &[Quat], v: &Vel) -> Vec3 {
+        match self {
+            Endpoint::Node(i) => v.node[i as usize],
+            Endpoint::Fixed => Vec3::ZERO,
+            Endpoint::Point(a, b, t) => m.end(a).velocity(m, rot, v) * (1.0 - t) + m.end(b).velocity(m, rot, v) * t,
+            Endpoint::Riding(b, local) => {
+                let b = b as usize;
+                v.lin[b] + v.ang[b].cross(rot[b].rotate(local))
+            }
+        }
+    }
+
+    /// Changes the end's velocity by an impulse `dir · j`, added when `plus` is set, else taken.
+    #[inline(always)]
+    fn kick(self, m: &Mass, rot: &[Quat], v: &mut Vel, dir: Vec3, j: Real, plus: bool) {
         match self {
             Endpoint::Fixed => {}
             Endpoint::Node(i) => {
                 let i = i as usize;
-                let m = dir * (inv_mass[i] * dl);
-                pos[i] = if plus { pos[i] + m } else { pos[i] - m };
+                let d = dir * (m.node[i] * j);
+                v.node[i] = if plus { v.node[i] + d } else { v.node[i] - d };
             }
             Endpoint::Point(a, b, t) => {
-                for (i, share) in [(a as usize, 1.0 - t), (b as usize, t)] {
-                    let m = dir * (share * inv_mass[i] * dl);
-                    pos[i] = if plus { pos[i] + m } else { pos[i] - m };
-                }
+                m.end(a).kick(m, rot, v, dir, (1.0 - t) * j, plus);
+                m.end(b).kick(m, rot, v, dir, t * j, plus);
+            }
+            Endpoint::Riding(b, local) => {
+                let b = b as usize;
+                let q = rot[b];
+                let p = if plus { dir * j } else { dir * -j };
+                v.lin[b] = v.lin[b] + p * m.body[b];
+                v.ang[b] = v.ang[b] + turn(m, q, b, q.rotate(local).cross(p));
             }
         }
     }
@@ -147,9 +319,9 @@ impl Endpoint {
 /// and its order are exactly those of the milestone 1 beam solve, so beams give the same bits
 /// as before.
 #[inline(always)]
-pub fn apply_correction(pos: &mut [Vec3], inv_mass: &[Real], a: Endpoint, b: Endpoint, dir: Vec3, dl: Real) {
-    a.shift(pos, inv_mass, dir, dl, false);
-    b.shift(pos, inv_mass, dir, dl, true);
+pub fn apply_correction(s: &mut Pose, m: &Mass, a: Endpoint, b: Endpoint, dir: Vec3, dl: Real) {
+    a.shift(s, m, dir, dl, false, true);
+    b.shift(s, m, dir, dl, true, true);
 }
 
 /// Speed at which a ground contact may remove overlap that was already there when the substep
@@ -160,31 +332,38 @@ pub const RECOVERY_SPEED: Real = 2.0;
 /// One ground contact for one substep: the push, then friction (plan 003, phases 3.2 and 3.3).
 ///
 /// The contact holds the plane `normal · p = offset` for the whole step. The contact point is
-/// `end`: a node, or a point on a beam. `p` is where it is now (after the beams), `p0` where it
-/// was at the substep's start (`prev` holds the nodes' start positions), `radius` its sphere.
-/// With `d = radius − (normal · p − offset)` the overlap now and `d0` the same at `p0`:
+/// `end`: a node, a point riding a body, or a point on a beam. `p` is where it is now in `s`
+/// (after the beams), `p0` where it was at the substep's start (`start` holds the nodes' and
+/// bodies' start poses), `radius` its sphere. With `d = radius − (normal · p − offset)` the
+/// overlap now and `d0` the same at `p0`:
 ///
 /// - **Push.** The overlap allowed to remain is `max(0, d0 − RECOVERY_SPEED · h)`, so new
 ///   overlap goes at once and old overlap drains at no more than the cap. If the overlap is
-///   larger, `Δλ_n = (d − allowed) / w` (rigid: no compliance, `w` the end's weight), along the
-///   normal, push only.
+///   larger, `Δλ_n = (d − allowed) / w` (rigid: no compliance, `w` the end's weight along the
+///   normal), along the normal, push only.
 /// - **Split recovery.** The part of the push that removes old overlap (at most
-///   `d0 − allowed`) also moves the start positions of the end's nodes as the push moved the
-///   nodes, so the velocities derived from `(p − p0) / h` do not include it: a node dug out of
-///   the ground rises at up to the cap but does not leave it with that speed and hop. Only the
-///   part that stops the end's own motion into the ground changes its velocity.
+///   `d0 − allowed`) also moves the start pose as the push moved the end, so the velocities
+///   derived from `(p − p0) / h` do not include it: a node dug out of the ground rises at up to
+///   the cap but does not leave it with that speed and hop. A body's velocity is derived
+///   against its predicted pose (`pred`), so that pose takes the same move (phase 5.3). Only
+///   the part that stops the end's own motion into the ground changes its velocity.
 /// - **Friction.** The end's sideways slip over the substep, `s` (the part of `p − p0` along
-///   the plane, after the push), is cancelled by `Δλ_t = min(|s| / w, μ · Δλ_n)`: in full if
-///   that is within `μ` times the push (sticking), otherwise by `μ` times the push (sliding).
-///   One coefficient, static equals kinetic.
+///   the plane, after the push), is cancelled by `Δλ_t = min(|s| / w_t, μ · Δλ_n)`, `w_t` the
+///   end's weight along the slip: in full if that is within `μ` times the push (sticking),
+///   otherwise by `μ` times the push (sliding). One coefficient, static equals kinetic.
 ///
 /// No push means no normal force and so no friction. Returns `Δλ_n` (zero when it did not push).
+///
+/// The island solve runs the two halves apart ([`push_ground_contact`], then
+/// [`ground_friction`]) so that all of a body's pushes come before any of its friction; this
+/// function is the two back to back, for one contact alone.
 #[allow(clippy::too_many_arguments)]
 #[inline]
 pub fn solve_ground_contact(
-    pos: &mut [Vec3],
-    prev: &mut [Vec3],
-    inv_mass: &[Real],
+    s: &mut Pose,
+    start: &mut Pose,
+    pred: &mut Pose,
+    m: &Mass,
     end: Endpoint,
     radius: Real,
     normal: Vec3,
@@ -192,45 +371,83 @@ pub fn solve_ground_contact(
     mu: Real,
     h: Real,
 ) -> Real {
+    let (dl_n, p0) = push_ground_contact(s, start, pred, m, end, radius, normal, offset, h);
+    ground_friction(s, start, m, end, normal, dl_n, p0, mu);
+    dl_n
+}
+
+/// The push and split recovery of [`solve_ground_contact`]. Returns `Δλ_n` (zero when it did
+/// not push) and `p0`, the end's place in `start` before the recovery moved it.
+#[allow(clippy::too_many_arguments)]
+#[inline]
+pub fn push_ground_contact(
+    s: &mut Pose,
+    start: &mut Pose,
+    pred: &mut Pose,
+    m: &Mass,
+    end: Endpoint,
+    radius: Real,
+    normal: Vec3,
+    offset: Real,
+    h: Real,
+) -> (Real, Vec3) {
     let ground = Endpoint::Fixed;
-    let w = ground.weight(inv_mass) + end.weight(inv_mass);
+    let w = ground.weight(m, s.rot, normal) + end.weight(m, s.rot, normal);
     if w == 0.0 {
-        return 0.0;
+        return (0.0, Vec3::ZERO);
     }
-    let start = end.place(prev);
-    let d = radius - (normal.dot(end.place(pos)) - offset);
-    let d0 = radius - (normal.dot(start) - offset);
+    let p0 = end.place(m, start.pos, start.centre, start.rot);
+    let d = radius - (normal.dot(end.place(m, s.pos, s.centre, s.rot)) - offset);
+    let d0 = radius - (normal.dot(p0) - offset);
     let cap = RECOVERY_SPEED * h;
     let allowed = if d0 > cap { d0 - cap } else { 0.0 };
     #[allow(clippy::neg_cmp_op_on_partial_ord)] // also true for NaN: a bad number is not pushed
     if !(d > allowed) {
-        return 0.0;
+        return (0.0, p0);
     }
     let push = d - allowed;
     let dl_n = push / w;
-    apply_correction(pos, inv_mass, ground, end, normal, dl_n);
+    apply_correction(s, m, ground, end, normal, dl_n);
     let old = d0 - allowed;
     if old > 0.0 {
         let recovered = if push < old { push } else { old };
-        end.shift(prev, inv_mass, normal, recovered / w, true);
+        end.shift(start, m, normal, recovered / w, true, true);
+        end.shift(pred, m, normal, recovered / w, true, false);
     }
-    let moved = end.place(pos) - start;
-    let slip = moved - normal * normal.dot(moved);
-    let s = slip.length();
-    if s > 0.0 {
-        let full = s / w;
-        let limit = mu * dl_n;
-        let dl_t = if full <= limit { full } else { limit };
-        apply_correction(pos, inv_mass, ground, end, slip / s, -dl_t);
-    }
-    dl_n
+    (dl_n, p0)
 }
 
-/// The one distance constraint (layout rule 6). A beam endpoint is always a node: `a` and `b`
-/// index `pos` and `inv_mass`. Returns `Δλ`; the ends move along the beam through
-/// [`apply_correction`], by inverse mass times `Δλ`, in opposite senses.
+/// The friction of [`solve_ground_contact`], after its push `dl_n` (none without a push). The
+/// slip is measured from `p0` for an end of loose nodes (the recovery moved them along the
+/// normal only, so that is the same slip), and from the end's place in `start` now for an end
+/// that touches a body: the recovery turned the body's start pose, which is not slip.
+#[allow(clippy::too_many_arguments)]
+#[inline]
+pub fn ground_friction(s: &mut Pose, start: &Pose, m: &Mass, end: Endpoint, normal: Vec3, dl_n: Real, p0: Vec3, mu: Real) {
+    if dl_n == 0.0 {
+        return;
+    }
+    let ground = Endpoint::Fixed;
+    let p0 = if end.touches_body(m) { end.place(m, start.pos, start.centre, start.rot) } else { p0 };
+    let moved = end.place(m, s.pos, s.centre, s.rot) - p0;
+    let slip = moved - normal * normal.dot(moved);
+    let sl = slip.length();
+    if sl > 0.0 {
+        let along = slip / sl;
+        let wt = ground.weight(m, s.rot, along) + end.weight(m, s.rot, along);
+        let full = sl / wt;
+        let limit = mu * dl_n;
+        let dl_t = if full <= limit { full } else { limit };
+        apply_correction(s, m, ground, end, along, -dl_t);
+    }
+}
+
+/// The one distance constraint (layout rule 6). A beam endpoint is a loose node or a point
+/// riding a body. Returns `Δλ`; the ends move along the beam through [`apply_correction`], by
+/// their weight times `Δλ`, in opposite senses.
 ///
-/// `C` is current length minus rest, `w` the sum of inverse masses and `α = compliance / h²`:
+/// `C` is current length minus rest, `w` the sum of the ends' weights along the beam and
+/// `α = compliance / h²`:
 ///
 /// `Δλ = -C / (w + α)`
 ///
@@ -250,29 +467,28 @@ pub fn solve_ground_contact(
 /// yields, though break still reads its length.
 ///
 /// Returns `(Δλ, yielded)`.
+#[allow(clippy::too_many_arguments)]
 pub fn solve_distance(
-    pos: &mut [Vec3],
-    inv_mass: &[Real],
-    a: usize,
-    b: usize,
+    s: &mut Pose,
+    m: &Mass,
+    a: Endpoint,
+    b: Endpoint,
     rest: &mut Real,
     yield_elong: Real,
     compliance: Real,
     h: Real,
 ) -> (Real, bool) {
-    let wa = inv_mass[a];
-    let wb = inv_mass[b];
-    let w = wa + wb;
-    if w == 0.0 {
-        return (0.0, false);
-    }
-    let d = pos[b] - pos[a];
+    let d = b.place(m, s.pos, s.centre, s.rot) - a.place(m, s.pos, s.centre, s.rot);
     let len = d.length();
     if len == 0.0 {
         // No direction to push along. Coincident endpoints are a generator bug; 1.6 guards it.
         return (0.0, false);
     }
     let dir = d / len;
+    let w = a.weight(m, s.rot, dir) + b.weight(m, s.rot, dir);
+    if w == 0.0 {
+        return (0.0, false);
+    }
     let alpha = compliance / (h * h);
     let mut dl = -(len - *rest) / (w + alpha);
     let mut yielded = false;
@@ -288,15 +504,16 @@ pub fn solve_distance(
             yielded = true;
         }
     }
-    apply_correction(pos, inv_mass, Endpoint::Node(a as u32), Endpoint::Node(b as u32), dir, dl);
+    apply_correction(s, m, a, b, dir, dl);
     (dl, yielded)
 }
 
 /// Beam damping, as a velocity pass after each substep's velocities are derived: a damper of
 /// `damping` newton-seconds per metre beside the spring, acting on the endpoints' relative
 /// speed along the beam. Implicit, so it never overshoots: the relative speed `v` becomes
-/// `v / (1 + β · w)` with `β = damping · h`, by an impulse `β · v / (1 + β · w)` shared by
-/// inverse mass. Positions are not touched.
+/// `v / (1 + β · w)` with `β = damping · h` and `w` the ends' weights along the beam, by an
+/// impulse `β · v / (1 + β · w)` given to each end through its weight (a riding end's body
+/// takes it as `V += p / M`, `ω += I⁻¹ (r × p)`). Positions are not touched.
 ///
 /// Why a separate pass and not the XPBD `γ` term inside the constraint (the phase 1.3 form):
 /// with one pass per substep the `γ` term sees each substep's predicted move as speed, so a
@@ -304,24 +521,36 @@ pub fn solve_distance(
 /// yield capping the spring it showed as wrong forces at rest, and a damped beam yielded when
 /// spring plus damper passed `F_y`. Here a still structure has zero relative speed and zero
 /// damper force, and yield reads the spring alone (ER 001, phase 1.5 damping fix).
-pub fn damp_beam(pos: &[Vec3], vel: &mut [Vec3], inv_mass: &[Real], a: usize, b: usize, damping: Real, h: Real) {
-    let wa = inv_mass[a];
-    let wb = inv_mass[b];
-    let w = wa + wb;
-    if w == 0.0 || damping == 0.0 {
+#[allow(clippy::too_many_arguments)]
+pub fn damp_beam(
+    pos: &[Vec3],
+    centre: &[Vec3],
+    rot: &[Quat],
+    v: &mut Vel,
+    m: &Mass,
+    a: Endpoint,
+    b: Endpoint,
+    damping: Real,
+    h: Real,
+) {
+    if damping == 0.0 {
         return;
     }
-    let d = pos[b] - pos[a];
+    let d = b.place(m, pos, centre, rot) - a.place(m, pos, centre, rot);
     let len = d.length();
     if len == 0.0 {
         return;
     }
     let dir = d / len;
-    let v = dir.dot(vel[b] - vel[a]);
+    let w = a.weight(m, rot, dir) + b.weight(m, rot, dir);
+    if w == 0.0 {
+        return;
+    }
+    let vr = dir.dot(b.velocity(m, rot, v) - a.velocity(m, rot, v));
     let beta = damping * h;
-    let j = beta * v / (1.0 + beta * w);
-    vel[a] = vel[a] + dir * (wa * j);
-    vel[b] = vel[b] - dir * (wb * j);
+    let j = beta * vr / (1.0 + beta * w);
+    a.kick(m, rot, v, dir, j, true);
+    b.kick(m, rot, v, dir, j, false);
 }
 
 /// What one island's solve returns.
@@ -333,28 +562,35 @@ pub struct SolveOutput {
     /// Nodes of this island clamped to `max_speed` at least once this step.
     pub clamped: u32,
     /// The island hit a bad number and was frozen: the caller sets `NODE_FROZEN` on its movable
-    /// nodes.
+    /// nodes and riders.
     pub frozen: bool,
 }
 
 /// Advances one island by one fixed step in `n` substeps. Per substep: predict (gravity and
-/// gathered forces into velocity, move), solve every beam once in order, derive velocity
-/// from the change in position, damp every beam once in order ([`damp_beam`]), then apply the
-/// clamps and the bad-number check. Pinned nodes (inverse mass zero) never move. Yield happens
+/// gathered forces into velocity, move; the bodies by their own integrator,
+/// [`crate::body::predict_body`]), solve every beam once in order, then the ground contacts,
+/// derive velocity from the change in position (bodies against their predicted pose,
+/// [`crate::body::derive_body`]), damp every beam once in order ([`damp_beam`]), then apply
+/// the clamps and the bad-number check. Pinned nodes (inverse mass zero) never move. A node
+/// riding a body is moved only through its body, as an [`Endpoint::Riding`] end, and is placed
+/// once after the last substep (`centre + R · offset`, velocity `V + ω × r`). Yield happens
 /// inside the substeps (the force cap in [`solve_distance`], which sets the `YIELDED` flag).
 /// After the last substep, break is checked once and the events returned ([`check_failure`]).
 ///
 /// **Movement clamp.** A movable node whose speed is above `max_speed` has its velocity scaled
 /// to `max_speed` (one square root, one divide) and its position reset to the substep's start
 /// position plus the clamped velocity times `h`, so position and velocity stay consistent. A
-/// speed that is NaN is not above anything and is left to the bad-number check.
+/// speed that is NaN is not above anything and is left to the bad-number check. A body's linear
+/// speed is scaled the same way, its pose left as it is (phase 5.2).
 ///
 /// **Bad-number freeze.** At the end of every substep, after the clamp, each movable node's
-/// position and velocity must be finite. If one is not, the island stops at once: every node's
-/// position goes back to its value at the start of the step (pinned nodes included, since a
-/// bad number reaches them through zero-weight arithmetic), movable velocities are zeroed,
-/// beam `rest`, flags and `last_lambda` go back to their start-of-step values, and the
-/// substep number is reported in a freeze event. Nothing else is checked or emitted.
+/// position and velocity, and each body's pose and velocities, must be finite. If one is not,
+/// the island stops at once: every node's position goes back to its value at the start of the
+/// step (pinned nodes included, since a bad number reaches them through zero-weight
+/// arithmetic), movable and riding velocities are zeroed, bodies go back to their start pose
+/// with no velocity, beam `rest`, flags and `last_lambda` go back to their start-of-step
+/// values, and the substep number is reported in a freeze event. Nothing else is checked or
+/// emitted.
 ///
 /// `last_lambda` ends up holding each beam's spring force from the last substep, `-Δλ / h²`,
 /// in newtons, positive in tension. It never exceeds the beam's yield force, and it does not
@@ -364,13 +600,19 @@ pub fn solve_island(isl: &mut Island, n: u32, max_speed: Real) -> SolveOutput {
     let h = STEP_SECONDS / n as Real;
     let nodes = isl.pos.len();
     let beams = isl.beam_a.len();
+    let bodies = isl.body_world.len();
     let mut prev = isl.pos.clone();
+    let mut prev_centre = isl.body_centre.clone();
+    let mut prev_rot = isl.body_rot.clone();
     let flags_before = isl.beam_flags.clone();
     let start_pos = isl.pos.clone();
     let start_vel = isl.vel.clone();
+    let start_centre = isl.body_centre.clone();
+    let start_rot = isl.body_rot.clone();
     let start_rest = isl.rest.clone();
     let start_lambda = isl.last_lambda.clone();
     let mut was_clamped = vec![false; nodes];
+    let mut pushes = vec![(0.0 as Real, Vec3::ZERO); isl.contact_node.len()];
     let mut clamped = 0u32;
     for substep in 1..=n {
         for i in 0..nodes {
@@ -383,55 +625,75 @@ pub fn solve_island(isl: &mut Island, n: u32, max_speed: Real) -> SolveOutput {
             isl.vel[i] = isl.vel[i] + acc * h;
             isl.pos[i] = isl.pos[i] + isl.vel[i] * h;
         }
-        for k in 0..beams {
-            // No original length means no strain scale, so no cap (a generator bug 1.6 guards).
-            let yield_elong = if isl.rest0[k] == 0.0 { Real::INFINITY } else { isl.yield_strain[k] * isl.rest0[k] };
-            let (dl, yielded) = solve_distance(
-                &mut isl.pos,
-                &isl.inv_mass,
-                isl.beam_a[k] as usize,
-                isl.beam_b[k] as usize,
-                &mut isl.rest[k],
-                yield_elong,
-                isl.compliance[k],
-                h,
-            );
-            if yielded {
-                isl.beam_flags[k] |= BEAM_YIELDED;
+        for b in 0..bodies {
+            prev_centre[b] = isl.body_centre[b];
+            prev_rot[b] = isl.body_rot[b];
+            predict_body(isl, b, h);
+        }
+        {
+            let m = mass!(isl);
+            let mut s = Pose { pos: &mut isl.pos, centre: &mut isl.body_centre, rot: &mut isl.body_rot };
+            for k in 0..beams {
+                // No original length means no strain scale, so no cap (a generator bug 1.6 guards).
+                let yield_elong = if isl.rest0[k] == 0.0 { Real::INFINITY } else { isl.yield_strain[k] * isl.rest0[k] };
+                let (dl, yielded) = solve_distance(
+                    &mut s,
+                    &m,
+                    m.end(isl.beam_a[k]),
+                    m.end(isl.beam_b[k]),
+                    &mut isl.rest[k],
+                    yield_elong,
+                    isl.compliance[k],
+                    h,
+                );
+                if yielded {
+                    isl.beam_flags[k] |= BEAM_YIELDED;
+                }
+                isl.last_lambda[k] = -dl / (h * h);
             }
-            isl.last_lambda[k] = -dl / (h * h);
-        }
-        // Ground contacts after the beams: node contacts in ascending packed node order, then
-        // beam midpoints in ascending beam order (phases 3.2 and 3.3).
-        for c in 0..isl.contact_node.len() {
-            let i = isl.contact_node[c];
-            solve_ground_contact(
-                &mut isl.pos,
-                &mut prev,
-                &isl.inv_mass,
-                Endpoint::Node(i),
-                isl.radius[i as usize],
-                isl.contact_normal[c],
-                isl.contact_offset[c],
-                isl.friction,
-                h,
-            );
-        }
-        for c in 0..isl.beam_contact.len() {
-            let k = isl.beam_contact[c] as usize;
-            let (a, b) = (isl.beam_a[k], isl.beam_b[k]);
-            let (ra, rb) = (isl.radius[a as usize], isl.radius[b as usize]);
-            solve_ground_contact(
-                &mut isl.pos,
-                &mut prev,
-                &isl.inv_mass,
-                Endpoint::Point(a, b, 0.5),
-                if ra < rb { ra } else { rb },
-                isl.beam_contact_normal[c],
-                isl.beam_contact_offset[c],
-                isl.friction,
-                h,
-            );
+            // Ground contacts after the beams: node contacts in ascending packed node order,
+            // then beam midpoints in ascending beam order (phases 3.2 and 3.3).
+            let mut start = Pose { pos: &mut prev, centre: &mut prev_centre, rot: &mut prev_rot };
+            let mut pred = Pose { pos: &mut [], centre: &mut isl.body_pred_centre, rot: &mut isl.body_pred_rot };
+            // Node contacts in two passes: every push, then every friction (phase 5.3). A
+            // loose node's contact touches only that node, so for loose nodes this is the same
+            // arithmetic as one pass; for a body's corners it keeps one corner's push from
+            // tilting the body under another corner's friction.
+            for c in 0..isl.contact_node.len() {
+                let i = isl.contact_node[c];
+                pushes[c] = push_ground_contact(
+                    &mut s,
+                    &mut start,
+                    &mut pred,
+                    &m,
+                    m.end(i),
+                    isl.radius[i as usize],
+                    isl.contact_normal[c],
+                    isl.contact_offset[c],
+                    h,
+                );
+            }
+            for c in 0..isl.contact_node.len() {
+                let (dl_n, p0) = pushes[c];
+                ground_friction(&mut s, &start, &m, m.end(isl.contact_node[c]), isl.contact_normal[c], dl_n, p0, isl.friction);
+            }
+            for c in 0..isl.beam_contact.len() {
+                let k = isl.beam_contact[c] as usize;
+                let (a, b) = (isl.beam_a[k], isl.beam_b[k]);
+                let (ra, rb) = (isl.radius[a as usize], isl.radius[b as usize]);
+                solve_ground_contact(
+                    &mut s,
+                    &mut start,
+                    &mut pred,
+                    &m,
+                    Endpoint::Point(a, b, 0.5),
+                    if ra < rb { ra } else { rb },
+                    isl.beam_contact_normal[c],
+                    isl.beam_contact_offset[c],
+                    isl.friction,
+                    h,
+                );
+            }
         }
         for i in 0..nodes {
             if isl.inv_mass[i] == 0.0 {
@@ -439,10 +701,28 @@ pub fn solve_island(isl: &mut Island, n: u32, max_speed: Real) -> SolveOutput {
             }
             isl.vel[i] = (isl.pos[i] - prev[i]) / h;
         }
-        for k in 0..beams {
-            damp_beam(&isl.pos, &mut isl.vel, &isl.inv_mass, isl.beam_a[k] as usize, isl.beam_b[k] as usize, isl.damping[k], h);
+        for b in 0..bodies {
+            derive_body(isl, b, h);
         }
-        // Movement and velocity clamp, then the bad-number check, in ascending node order.
+        {
+            let m = mass!(isl);
+            let mut v = Vel { node: &mut isl.vel, lin: &mut isl.body_vel, ang: &mut isl.body_omega };
+            for k in 0..beams {
+                damp_beam(
+                    &isl.pos,
+                    &isl.body_centre,
+                    &isl.body_rot,
+                    &mut v,
+                    &m,
+                    m.end(isl.beam_a[k]),
+                    m.end(isl.beam_b[k]),
+                    isl.damping[k],
+                    h,
+                );
+            }
+        }
+        // Movement and velocity clamp, then the bad-number check, in ascending node order,
+        // then the bodies in ascending order.
         let mut bad = false;
         for i in 0..nodes {
             if isl.inv_mass[i] == 0.0 {
@@ -462,10 +742,27 @@ pub fn solve_island(isl: &mut Island, n: u32, max_speed: Real) -> SolveOutput {
                 bad = true;
             }
         }
+        for b in 0..bodies {
+            let speed = isl.body_vel[b].length();
+            if speed > max_speed {
+                isl.body_vel[b] = isl.body_vel[b] * (max_speed / speed);
+            }
+            if !(isl.body_centre[b].is_finite() && isl.body_rot[b].is_finite() && isl.body_vel[b].is_finite() && isl.body_omega[b].is_finite()) {
+                bad = true;
+            }
+        }
         if bad {
             for i in 0..nodes {
                 isl.pos[i] = start_pos[i];
-                isl.vel[i] = if isl.inv_mass[i] != 0.0 { Vec3::ZERO } else { start_vel[i] };
+                isl.vel[i] = if isl.inv_mass[i] != 0.0 || isl.rides(i) { Vec3::ZERO } else { start_vel[i] };
+            }
+            for b in 0..bodies {
+                isl.body_centre[b] = start_centre[b];
+                isl.body_rot[b] = start_rot[b];
+                isl.body_pred_centre[b] = start_centre[b];
+                isl.body_pred_rot[b] = start_rot[b];
+                isl.body_vel[b] = Vec3::ZERO;
+                isl.body_omega[b] = Vec3::ZERO;
             }
             isl.rest.copy_from_slice(&start_rest);
             isl.beam_flags.copy_from_slice(&flags_before);
@@ -473,6 +770,16 @@ pub fn solve_island(isl: &mut Island, n: u32, max_speed: Real) -> SolveOutput {
             let event = Event { kind: EVENT_FREEZE, index: isl.root, step: 0, value: substep as Real };
             return SolveOutput { events: vec![event], clamped, frozen: true };
         }
+    }
+    // Riders follow their bodies, once per step, in node order (break reads their positions).
+    for i in 0..nodes {
+        if !isl.rides(i) {
+            continue;
+        }
+        let b = isl.node_body[i] as usize;
+        let p = isl.body_centre[b] + isl.body_rot[b].rotate(isl.offset[i]);
+        isl.pos[i] = p;
+        isl.vel[i] = isl.body_vel[b] + isl.body_omega[b].cross(p - isl.body_centre[b]);
     }
     SolveOutput { events: check_failure(isl, &flags_before), clamped, frozen: false }
 }

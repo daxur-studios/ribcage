@@ -10,7 +10,7 @@
 
 use beam_core::real::{Real, Vec3};
 use beam_core::sim::{state_hash, step, step_with_rule};
-use beam_core::solver::{apply_correction, Endpoint, SubstepRule};
+use beam_core::solver::{apply_correction, Endpoint, Mass, Pose, SubstepRule};
 use beam_core::terrain::Terrain;
 use beam_core::world::{BeamSpec, World, NODE_FROZEN};
 use beam_core::STEP_SECONDS;
@@ -194,21 +194,23 @@ fn midpoint_of_a_beam_with_a_pinned_end_is_held_by_the_free_node() {
 #[test]
 fn weighted_endpoint_moves_its_nodes_by_their_shares() {
     let inv_mass = [1.0, 0.5];
+    let m = Mass::nodes(&inv_mass);
     let mut pos = vec![Vec3::new(0.0, 0.0, 0.0), Vec3::new(2.0, 0.0, 0.0)];
     let mid = Endpoint::Point(0, 1, 0.5);
-    assert_eq!(mid.weight(&inv_mass), 0.25 * 1.0 + 0.25 * 0.5);
-    assert_eq!(mid.place(&pos), Vec3::new(1.0, 0.0, 0.0));
     let up = Vec3::new(0.0, 1.0, 0.0);
-    apply_correction(&mut pos, &inv_mass, Endpoint::Fixed, mid, up, 0.8);
+    assert_eq!(mid.weight(&m, &[], up), 0.25 * 1.0 + 0.25 * 0.5);
+    assert_eq!(mid.place(&m, &pos, &[], &[]), Vec3::new(1.0, 0.0, 0.0));
+    apply_correction(&mut Pose::nodes(&mut pos), &m, Endpoint::Fixed, mid, up, 0.8);
     assert!((pos[0].y - 0.4).abs() < 1e-15, "node 0 moved {}", pos[0].y);
     assert!((pos[1].y - 0.2).abs() < 1e-15, "node 1 moved {}", pos[1].y);
-    assert!((mid.place(&pos).y - 0.3).abs() < 1e-15, "point moved {}", mid.place(&pos).y);
+    let y = mid.place(&m, &pos, &[], &[]).y;
+    assert!((y - 0.3).abs() < 1e-15, "point moved {y}");
     // A point off the middle: weights 0.75 and 0.25.
     let third = Endpoint::Point(0, 1, 0.25);
-    assert_eq!(third.weight(&inv_mass), 0.75 * 0.75 * 1.0 + 0.25 * 0.25 * 0.5);
+    assert_eq!(third.weight(&m, &[], up), 0.75 * 0.75 * 1.0 + 0.25 * 0.25 * 0.5);
     // As the first end, the same shares move the other way.
     let mut back = vec![Vec3::ZERO, Vec3::new(2.0, 0.0, 0.0)];
-    apply_correction(&mut back, &inv_mass, third, Endpoint::Fixed, up, 1.0);
+    apply_correction(&mut Pose::nodes(&mut back), &m, third, Endpoint::Fixed, up, 1.0);
     assert!((back[0].y + 0.75).abs() < 1e-15 && (back[1].y + 0.125).abs() < 1e-15, "{:?}", back);
 }
 

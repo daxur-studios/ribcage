@@ -278,11 +278,11 @@ fn thrust_scene_through_the_boundary_matches_the_direct_world() {
 /// child of 0), one beam between them, and a thruster pushing a box corner along +x. Before step
 /// 10 the box is made rigid; before 40 the tetrahedron joins it; before 80 it is released; before
 /// 100 the box is released too. The same records are built in `test/wasm.test.ts`.
-pub const BODY_SCENE_120: u64 = 0xf585_4564_1d0a_5073;
+pub const BODY_SCENE_120: u64 = 0x7227_22cf_ee93_54f3;
 
 /// The same scene's state hash after step 60 (the 61st), while the body is alive: this one has the
 /// body sections in it.
-pub const BODY_SCENE_61: u64 = 0x9959_8779_2211_5153;
+pub const BODY_SCENE_61: u64 = 0x0602_4ffa_c786_af7b;
 
 fn body_scene_setup() -> Vec<Command> {
     let rec = |kind, a, b, f| Command { kind, a, b, reserved: 0, f };

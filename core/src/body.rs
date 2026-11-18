@@ -21,19 +21,19 @@
 //! is dropped). [`World::release`] gives each released node `V + ω × r` and recomputes the
 //! rest with the same `ω` and `V' = V + ω × (c' − c)`: momentum, spin and energy unchanged.
 //!
-//! **Integration** (per substep). Gravity and the step's external force push the centre;
-//! the external torque and the spin term turn the body ([`SpinForm`]); the rotation is
-//! updated with the Cayley map (no sine or cosine). The spin is clamped at
-//! [`World::max_angular_speed`]. Velocities are then derived against the predicted pose, which
-//! in 5.2 nothing moves (a body touches only itself; beams to bodies come in 5.3).
+//! **Integration** (per substep, inside the island solve since phase 5.3: a body is packed with
+//! the island of the live nodes it touches, [`crate::island`]). Gravity and the step's external
+//! force push the centre; the external torque and the spin term turn the body ([`SpinForm`]);
+//! the rotation is updated with the Cayley map (no sine or cosine). The spin is clamped at
+//! [`World::max_angular_speed`]. The constraints then move the body through its riding
+//! endpoints ([`crate::solver::Endpoint::Riding`]), and its velocities are derived against the
+//! predicted pose ([`derive_body`]).
 
-use crate::event::{Event, EVENT_FREEZE};
+use crate::island::Island;
 use crate::maths::{Mat3, Quat, Sym3};
 use crate::real::{Real, Vec3};
 use crate::sim::gravity_at;
-use crate::solver::MIN_SUBSTEPS;
-use crate::world::{World, NODE_ALIVE, NODE_FROZEN};
-use crate::STEP_SECONDS;
+use crate::world::{World, NODE_ALIVE};
 
 /// No body: a loose node, a segment that is not rigid.
 pub const NO_BODY: u32 = u32::MAX;
@@ -54,7 +54,7 @@ pub const SPIN_NEWTON_ITERATIONS: u32 = 3;
 
 /// How the gyroscopic term `−ω × L` of a body's spin is integrated (phase 5.2 measures all
 /// three; ER 005).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum SpinForm {
     /// Forward Euler on the body-frame momentum, `Π' = Π − h ω × Π`. Always gains energy.
     Explicit,
@@ -64,13 +64,8 @@ pub enum SpinForm {
     /// Implicit midpoint solved by Newton, then the momentum rotated by the same Cayley
     /// rotation that turns the body: keeps `|L|` and the world `L` to rounding and the energy to
     /// the Newton residual. The default.
+    #[default]
     Midpoint,
-}
-
-/// A body's step-start state, for the bad-number restore.
-struct Start {
-    centre: Vec3,
-    rot: Quat,
 }
 
 impl World {
@@ -388,149 +383,66 @@ impl World {
         }
         self.make_rigid(&group);
     }
+}
 
-    /// Integrates every live body over one step and writes its riders back. Called by the step
-    /// after the islands are copied back and before the forces are cleared. `fixed` is the
-    /// substep count when the caller fixed one; otherwise a body takes the rule's minimum (a
-    /// body alone has no beam to resolve). Bodies go in slot order; a body with a frozen rider
-    /// is skipped.
-    pub(crate) fn step_bodies(&mut self, fixed: Option<u32>, done: u64) {
-        let slots = self.body_flags.len();
-        if slots == 0 || !self.body_flags.iter().any(|&f| f & BODY_ALIVE != 0) {
-            return;
+/// One substep's prediction of packed body `b`: the linear kick and drift, the torque kick, the
+/// spin term and the rotation update, and the spin clamp. Stores the predicted pose in
+/// `body_pred_*`, what [`derive_body`] derives the velocity against.
+pub(crate) fn predict_body(isl: &mut Island, b: usize, h: Real) {
+    let mass = isl.body_mass[b];
+    let c = isl.body_centre[b];
+    let vel = isl.body_vel[b] + (gravity_at(c) + isl.body_force[b] / mass) * h;
+    let centre = c + vel * h;
+    let q = isl.body_rot[b];
+    let (inertia, inv) = (isl.body_inertia[b], isl.body_inv_inertia[b]);
+    // Body-frame momentum after the torque kick.
+    let pi0 = inertia.mul_vec(q.inv_rotate(isl.body_omega[b])) + q.inv_rotate(isl.body_torque[b]) * h;
+    let (q1, pi1) = match isl.spin_form {
+        SpinForm::Explicit => {
+            let w0 = inv.mul_vec(pi0);
+            let pi1 = pi0 - w0.cross(pi0) * h;
+            (rotate_by_rate(q, inv.mul_vec(pi1), h), pi1)
         }
-        // External force and torque per body, from the riders, in node order.
-        let mut force = vec![Vec3::ZERO; slots];
-        let mut torque = vec![Vec3::ZERO; slots];
-        let mut frozen = vec![false; slots];
-        let mut first_rider = vec![u32::MAX; slots];
-        for i in 0..self.pos.len() {
-            let b = self.node_body[i];
-            if b == NO_BODY {
-                continue;
-            }
-            let b = b as usize;
-            let f = self.force[i];
-            force[b] = force[b] + f;
-            torque[b] = torque[b] + (self.pos[i] - self.body_centre[b]).cross(f);
-            if self.node_flags[i] & NODE_FROZEN != 0 {
-                frozen[b] = true;
-            }
-            if first_rider[b] == u32::MAX {
-                first_rider[b] = i as u32;
-            }
+        SpinForm::Implicit => {
+            let w0 = inv.mul_vec(pi0);
+            let iw = inertia.mul_vec(w0);
+            // J = I + h (skew(ω) I − skew(I ω)), Δω = −J⁻¹ h ω × I ω.
+            let j = inertia.to_mat3().add(&Mat3::skew(w0).mul(&inertia.to_mat3()).sub(&Mat3::skew(iw)).scale(h));
+            let w1 = match j.solve(w0.cross(iw) * h) {
+                Some(d) => w0 - d,
+                None => w0,
+            };
+            (rotate_by_rate(q, w1, h), inertia.mul_vec(w1))
         }
-        let n = fixed.unwrap_or(MIN_SUBSTEPS).max(1);
-        let h = STEP_SECONDS / n as Real;
-        let mut bad = vec![0u32; slots];
-        for b in 0..slots {
-            if self.body_flags[b] & BODY_ALIVE == 0 || frozen[b] {
-                continue;
-            }
-            let start = Start { centre: self.body_centre[b], rot: self.body_rot[b] };
-            for substep in 1..=n {
-                self.predict_body(b, h, force[b], torque[b]);
-                self.derive_body(b, h);
-                if !self.body_finite(b) {
-                    bad[b] = substep;
-                    break;
-                }
-            }
-            if bad[b] != 0 {
-                self.body_centre[b] = start.centre;
-                self.body_rot[b] = start.rot;
-                self.body_prev_centre[b] = start.centre;
-                self.body_prev_rot[b] = start.rot;
-                self.body_vel[b] = Vec3::ZERO;
-                self.body_omega[b] = Vec3::ZERO;
-                self.events.push(Event { kind: EVENT_FREEZE, index: first_rider[b], step: done, value: bad[b] as Real });
-            }
-        }
-        // Riders follow, once per step, in node order.
-        for i in 0..self.pos.len() {
-            let b = self.node_body[i];
-            if b == NO_BODY || frozen[b as usize] {
-                continue;
-            }
-            let b = b as usize;
-            if bad[b] != 0 {
-                self.node_flags[i] |= NODE_FROZEN;
-            }
-            let p = self.body_centre[b] + self.body_rot[b].rotate(self.node_offset[i]);
-            self.pos[i] = p;
-            self.vel[i] = self.body_vel[b] + self.body_omega[b].cross(p - self.body_centre[b]);
-        }
+        SpinForm::Midpoint => midpoint_spin(q, pi0, inv, h),
+    };
+    // The clamp scales the spin, so momentum and rate stay in proportion.
+    let mut omega_b = inv.mul_vec(pi1);
+    let speed = omega_b.length();
+    if speed > isl.max_angular_speed {
+        omega_b = omega_b * (isl.max_angular_speed / speed);
     }
+    isl.body_vel[b] = vel;
+    isl.body_centre[b] = centre;
+    isl.body_rot[b] = q1;
+    isl.body_omega[b] = q1.rotate(omega_b);
+    isl.body_pred_centre[b] = centre;
+    isl.body_pred_rot[b] = q1;
+}
 
-    fn body_finite(&self, b: usize) -> bool {
-        self.body_centre[b].is_finite()
-            && self.body_rot[b].is_finite()
-            && self.body_vel[b].is_finite()
-            && self.body_omega[b].is_finite()
+/// One substep's velocity update of packed body `b` from what the constraints did to its
+/// predicted pose: `V += (c − c_pred) / h`, `ω += 2 vec(q ⊗ q_pred⁻¹) / h`. Exactly nothing when
+/// nothing moved the body. The linear speed clamp is the island solve's.
+pub(crate) fn derive_body(isl: &mut Island, b: usize, h: Real) {
+    let (c, q) = (isl.body_centre[b], isl.body_rot[b]);
+    let (cp, qp) = (isl.body_pred_centre[b], isl.body_pred_rot[b]);
+    if c != cp {
+        isl.body_vel[b] = isl.body_vel[b] + (c - cp) / h;
     }
-
-    /// One substep's prediction: the linear kick and drift, the torque kick, the spin term and
-    /// the rotation update, and the spin clamp. Stores the predicted pose in `body_prev_*`.
-    pub(crate) fn predict_body(&mut self, b: usize, h: Real, force: Vec3, torque: Vec3) {
-        let mass = self.body_mass[b];
-        let c = self.body_centre[b];
-        let vel = self.body_vel[b] + (gravity_at(c) + force / mass) * h;
-        let centre = c + vel * h;
-        let q = self.body_rot[b];
-        let (inertia, inv) = (self.body_inertia[b], self.body_inv_inertia[b]);
-        // Body-frame momentum after the torque kick.
-        let pi0 = inertia.mul_vec(q.inv_rotate(self.body_omega[b])) + q.inv_rotate(torque) * h;
-        let (q1, pi1) = match self.spin_form {
-            SpinForm::Explicit => {
-                let w0 = inv.mul_vec(pi0);
-                let pi1 = pi0 - w0.cross(pi0) * h;
-                (rotate_by_rate(q, inv.mul_vec(pi1), h), pi1)
-            }
-            SpinForm::Implicit => {
-                let w0 = inv.mul_vec(pi0);
-                let iw = inertia.mul_vec(w0);
-                // J = I + h (skew(ω) I − skew(I ω)), Δω = −J⁻¹ h ω × I ω.
-                let j = inertia.to_mat3().add(&Mat3::skew(w0).mul(&inertia.to_mat3()).sub(&Mat3::skew(iw)).scale(h));
-                let w1 = match j.solve(w0.cross(iw) * h) {
-                    Some(d) => w0 - d,
-                    None => w0,
-                };
-                (rotate_by_rate(q, w1, h), inertia.mul_vec(w1))
-            }
-            SpinForm::Midpoint => midpoint_spin(q, pi0, inv, h),
-        };
-        // The clamp scales the spin, so momentum and rate stay in proportion.
-        let mut omega_b = inv.mul_vec(pi1);
-        let speed = omega_b.length();
-        if speed > self.max_angular_speed {
-            omega_b = omega_b * (self.max_angular_speed / speed);
-        }
-        self.body_vel[b] = vel;
-        self.body_centre[b] = centre;
-        self.body_rot[b] = q1;
-        self.body_omega[b] = q1.rotate(omega_b);
-        self.body_prev_centre[b] = centre;
-        self.body_prev_rot[b] = q1;
-    }
-
-    /// One substep's velocity update from what the constraints did to the predicted pose:
-    /// `V += (c − c_pred) / h`, `ω += 2 vec(q ⊗ q_pred⁻¹) / h`. Exactly nothing when nothing
-    /// moved the body (always, in 5.2). The linear speed is then clamped at `max_speed`.
-    pub(crate) fn derive_body(&mut self, b: usize, h: Real) {
-        let (c, q) = (self.body_centre[b], self.body_rot[b]);
-        let (cp, qp) = (self.body_prev_centre[b], self.body_prev_rot[b]);
-        if c != cp {
-            self.body_vel[b] = self.body_vel[b] + (c - cp) / h;
-        }
-        if q != qp {
-            let d = q.delta_vec(qp);
-            let d = if q.delta_w(qp) < 0.0 { -d } else { d };
-            self.body_omega[b] = self.body_omega[b] + d * (2.0 / h);
-        }
-        let speed = self.body_vel[b].length();
-        if speed > self.max_speed {
-            self.body_vel[b] = self.body_vel[b] * (self.max_speed / speed);
-        }
+    if q != qp {
+        let d = q.delta_vec(qp);
+        let d = if q.delta_w(qp) < 0.0 { -d } else { d };
+        isl.body_omega[b] = isl.body_omega[b] + d * (2.0 / h);
     }
 }
 

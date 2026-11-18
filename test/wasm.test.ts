@@ -15,8 +15,8 @@ const TERRAIN_SCENE_120 = 0x2bdef035f12d0c86n;
 /** A three-node craft with two thrusters and mid-run throttle changes, after 120 steps (`THRUST_SCENE_120` in core/tests/ffi.rs). */
 const THRUST_SCENE_120 = 0x765d0f4475514944n;
 /** A box and a tetrahedron as two segments, made rigid, merged and released (`BODY_SCENE_61` and `BODY_SCENE_120` in core/tests/ffi.rs). */
-const BODY_SCENE_61 = 0x9959877922115153n;
-const BODY_SCENE_120 = 0xf58545641d0a5073n;
+const BODY_SCENE_61 = 0x06024ffac786af7bn;
+const BODY_SCENE_120 = 0x722722cfee9354f3n;
 /** End hash of the reported scene after 720 steps at the default rule (`cargo run --release -p beam-core --example bench`). */
 const STANDARD_BENCH_720 = 0x871092299f3cea56n;
 

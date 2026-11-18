@@ -34,7 +34,8 @@ pub fn find_contacts(isl: &mut Island, terrain: &Terrain) {
     isl.friction = terrain.friction;
     let dt = STEP_SECONDS;
     for i in 0..isl.pos.len() {
-        if isl.inv_mass[i] == 0.0 {
+        // A rider (phase 5.3) gets its contact as a riding endpoint of its body.
+        if isl.inv_mass[i] == 0.0 && !isl.rides(i) {
             continue;
         }
         let p = isl.pos[i];
@@ -52,7 +53,7 @@ pub fn find_contacts(isl: &mut Island, terrain: &Terrain) {
     // A beam between two pinned nodes cannot be pushed and gets none.
     for k in 0..isl.beam_a.len() {
         let (a, b) = (isl.beam_a[k] as usize, isl.beam_b[k] as usize);
-        if isl.inv_mass[a] == 0.0 && isl.inv_mass[b] == 0.0 {
+        if isl.inv_mass[a] == 0.0 && !isl.rides(a) && isl.inv_mass[b] == 0.0 && !isl.rides(b) {
             continue;
         }
         let p = (isl.pos[a] + isl.pos[b]) * 0.5;

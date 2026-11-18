@@ -79,7 +79,7 @@ fn step_inner(world: &mut World, choice: Choice) -> StepStats {
         world.clamped_nodes += out.clamped;
         if out.frozen {
             for (p, &i) in isl.node_world.iter().enumerate() {
-                if isl.inv_mass[p] != 0.0 {
+                if isl.inv_mass[p] != 0.0 || isl.rides(p) {
                     world.node_flags[i as usize] |= NODE_FROZEN;
                 }
             }
@@ -94,14 +94,6 @@ fn step_inner(world: &mut World, choice: Choice) -> StepStats {
     for isl in islands.iter().filter(|isl| !isl.skipped) {
         copy_back(world, isl);
     }
-    // Rigid bodies (plan 005), each on its own in phase 5.2, then their riders written back.
-    world.step_bodies(
-        match choice {
-            Choice::Rule(_) => None,
-            Choice::Fixed(n) => Some(n),
-        },
-        done,
-    );
     for f in world.force.iter_mut() {
         *f = Vec3::ZERO;
     }
