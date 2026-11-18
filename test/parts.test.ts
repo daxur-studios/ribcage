@@ -427,16 +427,16 @@ const PODS: PodParams[] = [
   { ringNodes: 6, bottomRadius: 0.7, topRadius: 0.4, height: 1, apexRise: 0.5, material: "carbon", memberArea: 2e-4, mass: 600 },
   { ringNodes: 16, bottomRadius: 1.4, topRadius: 0.8, height: 1.5, material: "aluminium", memberArea: 3e-4, mass: 1800 },
 ];
-/** The hopper's leg: 75 kN crush force over 0.15 m, a spring that reaches it after 0.25 m (ER 004). */
+/** The hopper's leg as shipped in `hopper.craft.json` (member area, mount patch, crush 75 kN over 0.15 m, a spring that reaches it after 0.25 m; ER 004). */
 const LEG: LegParams = {
   length: 3,
   footOffset: 1.5,
   footSize: 0.35,
-  mountWidth: 0.35,
-  mountHeight: 0.35,
+  mountWidth: 0.765,
+  mountHeight: 0.625,
   bodyWidth: 0.9,
   material: "aluminium",
-  memberArea: 3e-4,
+  memberArea: 2e-4,
   mass: 150,
   sprungStiffness: 3e5,
   sprungStroke: 0.3,

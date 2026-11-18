@@ -11,9 +11,11 @@ import {
   centreOf,
   hopCommands,
   joinedLegs,
+  lostLegs,
   partNodes,
   prepareDrop,
   prepareHop,
+  scatterSpots,
   tiltDegrees,
   type Spot,
 } from "../src/landing.ts";
@@ -48,7 +50,9 @@ interface Landing {
   bodyRest: number;
   legRest: number;
   tilt: number;
+  /** Legs still connected to the pod (the walk), and legs lost (cut off, or a crush bay of under three members). */
   legs: boolean[];
+  lost: boolean[];
   final: Float64Array;
 }
 
@@ -58,7 +62,7 @@ function watch(core: Core, flight: Flight, steps: number, commands?: (batch: Com
   const world = new World(core);
   world.apply(flight.setup);
   const body = new Set([...partNodes(craft, "tank"), ...partNodes(craft, "pod"), ...partNodes(craft, "engine")]);
-  const out: Landing = { touchStep: -1, steps, yields: 0, broken: new Set(), freezes: 0, deepest: -Infinity, fastest: 0, bodyRest: 0, legRest: 0, tilt: 0, legs: [], final: new Float64Array(0) };
+  const out: Landing = { touchStep: -1, steps, yields: 0, broken: new Set(), freezes: 0, deepest: -Infinity, fastest: 0, bodyRest: 0, legRest: 0, tilt: 0, legs: [], lost: [], final: new Float64Array(0) };
   let prev = world.positions().slice();
   const restFrom = steps - 120;
   for (let s = 0; s < steps; s++) {
@@ -91,16 +95,22 @@ function watch(core: Core, flight: Flight, steps: number, commands?: (batch: Com
   out.final = world.positions().slice();
   out.tilt = tiltDegrees(craft, out.final);
   out.legs = joinedLegs(craft, out.broken);
+  out.lost = lostLegs(craft, out.broken);
   world.free();
   return out;
 }
 
-/** The checks every run must pass, whatever the speed. */
-function commonBands(label: string, r: Landing, unbrokenAtRest: boolean): void {
-  const radius = 0.05; // the largest node radius is below this
+/** The safety checks every run must pass, whatever the speed or spot: no sinking, no clamped node, no frozen island. */
+function safetyBands(label: string, r: Landing): void {
+  const radius = 0.05; // every node of the hopper has this radius
   assert.ok(r.deepest < radius + 0.01, `${label}: a node went ${r.deepest.toFixed(3)} m below the ground`);
   assert.ok(r.fastest < 100, `${label}: a node reached ${r.fastest.toFixed(1)} m/s (clamped nodes would sit at 1000)`);
   assert.equal(r.freezes, 0, `${label}: an island froze`);
+}
+
+/** The safety checks and the rest window: the checks every chosen run must pass. */
+function commonBands(label: string, r: Landing, unbrokenAtRest: boolean): void {
+  safetyBands(label, r);
   assert.ok(r.touchStep > 0 && r.touchStep + 900 <= r.steps - 120, `${label}: touchdown at step ${r.touchStep}, so the rest window (the last 2 s) starts under 15 s after it`);
   assert.ok(r.bodyRest < REST_SPEED, `${label}: the body still moves at ${r.bodyRest.toFixed(2)} m/s at the end`);
   if (unbrokenAtRest) assert.ok(r.legRest < REST_SPEED, `${label}: a leg still moves at ${r.legRest.toFixed(2)} m/s at the end`);
@@ -136,18 +146,47 @@ for (const spot of [PAD, ...ROUGH_SPOTS] as Spot[]) {
   });
 }
 
-test("a 7 m/s touchdown on the rough spots snaps a leg and tips the craft over, on at least four of five", async (t) => {
+test("a 7 m/s touchdown on the five rough spots loses a leg and tips the craft over, on at least four of five", async (t) => {
   const core = await loadCore();
   let snapped = 0;
   for (const spot of ROUGH_SPOTS) {
     const r = watch(core, prepareDrop(HOPPER, spot, 7), STEPS);
-    const lost = r.legs.filter((j) => !j).length;
+    const lost = r.lost.filter((l) => l).length;
     const tipped = r.tilt > 60;
-    t.diagnostic(`${spot.name}: legs ${r.legs.map((j) => (j ? 1 : 0)).join("")} tilt ${r.tilt.toFixed(0)}° broken ${r.broken.size} yields ${r.yields}`);
+    t.diagnostic(`${spot.name}: lost ${r.lost.map((l) => (l ? 1 : 0)).join("")} joined ${r.legs.map((j) => (j ? 1 : 0)).join("")} tilt ${r.tilt.toFixed(0)}° broken ${r.broken.size} yields ${r.yields}`);
     if (lost > 0 && tipped) snapped++;
     commonBands(`7 m/s ${spot.name}`, r, false);
   }
-  assert.ok(snapped >= 4, `a leg snapped and the craft tipped on ${snapped} of 5 spots`);
+  assert.ok(snapped >= 4, `a leg was lost and the craft tipped on ${snapped} of 5 spots`);
+});
+
+/** How many unchosen spots (`scatterSpots`) the claims below are read on. */
+const SCATTER = 30;
+
+test("on 30 unchosen spots a 3 m/s touchdown is nearly always clean", async (t) => {
+  const core = await loadCore();
+  let clean = 0;
+  for (const spot of scatterSpots(SCATTER)) {
+    const r = watch(core, prepareDrop(HOPPER, spot, 3), STEPS);
+    if (r.broken.size === 0 && r.tilt < 15) clean++;
+    safetyBands(`3 m/s ${spot.name}`, r);
+  }
+  t.diagnostic(`3 m/s: ${clean} of ${SCATTER} clean (nothing broken, tilt under 15°)`);
+  assert.ok(clean >= 24, `only ${clean} of ${SCATTER} unchosen spots are clean at 3 m/s`);
+});
+
+test("on 30 unchosen spots a 7 m/s touchdown usually loses a leg", async (t) => {
+  const core = await loadCore();
+  let lostOne = 0;
+  let tipped = 0;
+  for (const spot of scatterSpots(SCATTER)) {
+    const r = watch(core, prepareDrop(HOPPER, spot, 7), STEPS);
+    if (r.lost.some((l) => l)) lostOne++;
+    if (r.tilt > 60) tipped++;
+    safetyBands(`7 m/s ${spot.name}`, r);
+  }
+  t.diagnostic(`7 m/s: a leg lost on ${lostOne} of ${SCATTER}, craft tipped on ${tipped}`);
+  assert.ok(lostOne >= 22, `a leg was lost on only ${lostOne} of ${SCATTER} unchosen spots at 7 m/s`);
 });
 
 test("a 7 m/s touchdown on the flat pad: recorded, not required", async (t) => {
@@ -175,10 +214,10 @@ function recordHop(core: Core): { bytes: Uint8Array; hash: bigint; landing: Land
   return { bytes: encodeRecording(rec), hash, landing };
 }
 
-test("the scripted hop lands hard in the rough, snaps a leg, and tips the craft over", async () => {
+test("the scripted hop lands hard in the rough, loses a leg, and tips the craft over", async () => {
   const core = await loadCore();
   const { landing: r } = recordHop(core);
-  assert.ok(r.legs.some((j) => !j), `no leg snapped (legs ${r.legs.join(",")})`);
+  assert.ok(r.lost.some((l) => l), `no leg was lost (lost ${r.lost.join(",")})`);
   assert.ok(r.tilt > 60, `tilt ${r.tilt.toFixed(0)}°`);
   commonBands("hop", r, false);
   const tank = centreOf(r.final, partNodes(prepareHop(HOPPER).flight.loaded.craft, "tank"));

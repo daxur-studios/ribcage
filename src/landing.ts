@@ -32,18 +32,37 @@ export const PAD: Spot = { name: 'pad', x: 0, z: 0, yaw: 0 };
 
 /**
  * Five fixed spots in the rough area (`ROUGH_AREA`), each with its own turn so the four feet meet
- * different slopes. They were picked by a search over forty spots on a fixed grid (ER 004, phase
- * 4.8): on these a touchdown at 3 m/s breaks nothing and, at 7 m/s, a leg snaps and the craft
- * tips over. On most other spots at 7 m/s the crush bay folds, a hinge member keeps the leg
- * joined, and the craft tips without a snap.
+ * different slopes. They were picked by a search (ER 004, phase 4.8 and its review): on these a
+ * touchdown at 3 m/s breaks nothing and, at 7 m/s, a leg is lost (`lostLegs`) and the craft tips
+ * over, and each still does so when moved 0.25 m either way or turned one step (at least five of
+ * those seven variations in six). They are chosen, not typical: `scatterSpots` is the unchosen set.
  */
 export const ROUGH_SPOTS: readonly Spot[] = [
   { name: 'rough-a', x: 10.75, z: -4.5, yaw: 2 },
   { name: 'rough-b', x: 10.5, z: -2.75, yaw: 1 },
-  { name: 'rough-c', x: 10.5, z: 2, yaw: 1 },
+  { name: 'rough-c', x: 12.5, z: -0.75, yaw: 4 },
   { name: 'rough-d', x: 11.25, z: 3, yaw: 3 },
-  { name: 'rough-e', x: 12, z: 3.5, yaw: 1 },
+  { name: 'rough-e', x: 10, z: -5.5, yaw: 0 },
 ];
+
+/**
+ * `count` spots spread over the rough area by a small integer generator (the same on every
+ * machine), with yaw 0 to 5: the unchosen set the hard-landing claims are also read against.
+ */
+export function scatterSpots(count: number, seed = 777): Spot[] {
+  let state = seed;
+  const next = (): number => {
+    state = (state * 1664525 + 1013904223) % 4294967296;
+    return state / 4294967296;
+  };
+  const out: Spot[] = [];
+  for (let i = 0; i < count; i++) {
+    const x = 8 + 6 * next();
+    const z = -6 + 12 * next();
+    out.push({ name: `scatter-${i}`, x, z, yaw: Math.floor(next() * 6) });
+  }
+  return out;
+}
 
 /** The drop height in metres for a touchdown at `speed` m/s. */
 export function dropHeight(speed: number): number {
@@ -134,6 +153,37 @@ export function joinedLegs(craft: LoadedCraft['craft'], broken: ReadonlySet<numb
   return out;
 }
 
+/**
+ * How many of the crush bay's twelve members of leg `leg` have not broken. The bay is bay 1 of the
+ * leg: the members between its stations 1 and 2 (nodes 4 to 7 and 8 to 11 of the part).
+ */
+export function crushLive(craft: LoadedCraft['craft'], broken: ReadonlySet<number>, leg: number): number {
+  const entry = craft.tree.find((t) => t.id === `leg${leg}`);
+  if (!entry) throw new Error(`the craft has no part leg${leg}`);
+  const top = new Set([4, 5, 6, 7].map((k) => entry.nodeOf[k]!));
+  const bottom = new Set([8, 9, 10, 11].map((k) => entry.nodeOf[k]!));
+  let live = 0;
+  for (const [i, b] of craft.beams.entries()) {
+    if (broken.has(i)) continue;
+    if ((top.has(b.a) && bottom.has(b.b)) || (top.has(b.b) && bottom.has(b.a))) live++;
+  }
+  return live;
+}
+
+/** A leg whose crush bay has fewer live members than this is lost. An even 7 m/s drop leaves six of twelve; a folded leg one to four. */
+export const LEG_LOST_BELOW = 3;
+
+/**
+ * Which legs are lost: cut off from the pod (`joinedLegs`), or hanging by a crush bay of fewer than
+ * `LEG_LOST_BELOW` members. A crush bay can fold about one hinge member that survives, which keeps
+ * the foot connected but leaves a leg that carries nothing, so a fold counts as a snap (ER 004,
+ * phase 4.8 review).
+ */
+export function lostLegs(craft: LoadedCraft['craft'], broken: ReadonlySet<number>): boolean[] {
+  const joined = joinedLegs(craft, broken);
+  return joined.map((j, leg) => !j || crushLive(craft, broken, leg) < LEG_LOST_BELOW);
+}
+
 /** The centre of a set of nodes. */
 export function centreOf(positions: ArrayLike<number>, nodes: readonly number[]): [number, number, number] {
   const c: [number, number, number] = [0, 0, 0];
@@ -187,10 +237,10 @@ export type HopKey = readonly [step: number, throttle: number];
 /**
  * The hop, in steps of 1/60 s: the engine lifts the craft off the pad (0.85, then 0.52 from 0.4 s,
  * then a hold just under its weight from 2.5 s), the nudge pushes across from 0.33 s, and both are
- * cut at 3.83 s so the craft falls and touches down at about 7.4 m/s, 8 m from where it left.
+ * cut at 3.67 s (step 220, in the middle of the range of cuts, 180 to 300, that all lose a leg) so the craft falls and touches down at about 7.4 m/s, 7.4 m from where it left.
  */
-export const HOP_ENGINE: readonly HopKey[] = [[0, 0.85], [24, 0.52], [150, 0.564], [230, 0]];
-export const HOP_NUDGE: readonly HopKey[] = [[20, 1], [230, 0]];
+export const HOP_ENGINE: readonly HopKey[] = [[0, 0.85], [24, 0.52], [150, 0.564], [220, 0]];
+export const HOP_NUDGE: readonly HopKey[] = [[20, 1], [220, 0]];
 /** Steps the hop is run for: 22 s, touchdown at about 4.6 s and then a rest window that starts 15 s after it. */
 export const HOP_STEPS = 1320;
 
