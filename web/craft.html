@@ -41,6 +41,23 @@
   #legend .ramp { height:8px; border-radius:4px; margin:3px 0; background:linear-gradient(90deg,#4aa3ff,#8a93a3,#ff5d5d); }
   #legend .row { display:flex; justify-content:space-between; }
   #legend .swatch { display:inline-block; width:10px; height:3px; margin-right:4px; vertical-align:middle; }
+  #build-panel { position:absolute; left:12px; top:10px; width:310px; max-height:calc(100% - 20px); overflow-y:auto; background:#171b22ee; border:1px solid #323a49; border-radius:6px; padding:8px 10px; }
+  #build-panel[hidden] { display:none; }
+  #build-panel h3 { margin:0 0 6px; font-size:13px; font-weight:normal; color:var(--dim); }
+  #build-panel .row { display:flex; gap:6px; align-items:center; flex-wrap:wrap; margin:5px 0; }
+  #build-panel label { gap:4px; cursor:default; }
+  #build-panel select, #build-panel input[type=text], #build-panel input[type=number] { font:inherit; color:var(--fg); background:#232a35; border:1px solid #323a49; border-radius:4px; padding:2px 5px; }
+  #build-panel input[type=number] { width:88px; }
+  #build-panel #b-id { width:90px; }
+  #build-panel #b-target, #build-panel #b-child { max-width:200px; }
+  #b-params { display:grid; grid-template-columns:auto 1fr; gap:3px 8px; align-items:center; margin:6px 0; }
+  #b-params label { justify-content:space-between; }
+  #build-panel #b-params input, #build-panel #b-params select { width:76px; min-width:0; }
+  #build-panel { overflow-x:hidden; }
+  #b-msg { min-height:2.8em; white-space:pre-wrap; color:var(--dim); }
+  #b-msg.refused { color:#ff9a3c; }
+  #b-list { margin:4px 0; color:var(--dim); white-space:pre; font-size:12px; }
+  #stage.building #readout { display:none; }
 </style>
 </head>
 <body>
@@ -57,6 +74,9 @@
   </div>
   <div class="group"><span>Parts</span>
     <select id="part" title="One default part on its own on the pad"></select>
+  </div>
+  <div class="group"><span>Build</span>
+    <button id="build" title="Open the assembly panel: put parts together one at a time">Assemble…</button>
   </div>
   <div class="group"><span>Throttle</span>
     <button id="t-down" title="↓ or s">−</button>
@@ -97,6 +117,36 @@
 <div id="stage">
   <canvas id="view"></canvas>
   <div id="readout"></div>
+  <div id="build-panel" hidden>
+    <h3>Assemble a craft</h3>
+    <div class="row">
+      <label>part <select id="b-type"></select></label>
+      <label>id <input type="text" id="b-id" placeholder="(automatic)"></label>
+    </div>
+    <div id="b-params"></div>
+    <div class="row"><label>attach to <select id="b-target" title="A free ring or mount patch of the craft so far (or click its marker in the view)"></select></label></div>
+    <div class="row"><label>by its <select id="b-child" title="Which ring or mount of the new part meets it"></select></label></div>
+    <div class="row">
+      <button id="b-add" title="Add the part and attach it">Add part</button>
+      <button id="b-turn-minus" title="Turn the last part one step back (its ring clock, or the root's yaw)">⟲ turn</button>
+      <button id="b-turn-plus" title="Turn the last part one step on">turn ⟳</button>
+      <button id="b-remove" title="Take the last part off">Remove last</button>
+    </div>
+    <div class="row">root at
+      <label>x <input type="number" step="any" id="b-x" value="0"></label>
+      <label>y <input type="number" step="any" id="b-y" value="0"></label>
+      <label>z <input type="number" step="any" id="b-z" value="0"></label>
+      <label>yaw <input type="number" step="1" id="b-yaw" value="0" title="whole 15° steps"></label>
+      <label title="Set the height so the craft stands on the pad"><input type="checkbox" id="b-stand" checked> stand on the pad</label>
+    </div>
+    <div id="b-msg"></div>
+    <div id="b-list"></div>
+    <div class="row">
+      <button id="b-fly" title="Fly the craft as it is now">Fly this craft</button>
+      <button id="b-demo" title="Assemble the hopper part by part with the same actions">Demo: the hopper</button>
+      <button id="b-clear" title="Start again with nothing">Clear</button>
+    </div>
+  </div>
   <div id="hint">Throttle: ↑/w up, ↓/s down, z full, x cut. Space pauses, . steps once, r restarts. Drag to orbit, wheel to zoom.</div>
   <div id="legend">
     <div>beam stress (strain ÷ yield)</div>

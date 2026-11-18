@@ -213,6 +213,18 @@ export class Stage {
     this.scene.add(this.panelMesh);
   }
 
+  /** Takes the craft's beams, nodes and panels off the stage (the ground stays). */
+  clearCraft(): void {
+    this.#dispose(this.beamMesh);
+    this.#dispose(this.nodeMesh);
+    this.#dispose(this.panelMesh);
+    this.nodeTexture?.dispose();
+    this.beamMesh = null;
+    this.nodeMesh = null;
+    this.panelMesh = null;
+    this.nodeTexture = null;
+  }
+
   /** Shows or hides the three layers as `showBeams`, `showNodes` and `showPanels` say. */
   applyLayers(): void {
     if (this.beamMesh) this.beamMesh.visible = this.showBeams;

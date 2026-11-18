@@ -38,6 +38,7 @@ import { lerpPositions } from '../src/render3d.ts';
 import { decodeRecording, encodeRecording, Player, Recorder, type Recording } from '../src/recording.ts';
 import type { Terrain } from '../src/terrain.ts';
 import { World, type Snapshot } from '../src/world.ts';
+import { createBuilder } from './assemble3d.ts';
 import { Stage } from './stage3d.ts';
 
 const MAX_STEPS_PER_FRAME = 8;
@@ -147,6 +148,47 @@ let lastRecording: Recording | null = null;
 let stopAt = -1;
 
 const spots: readonly Spot[] = [PAD, ...ROUGH_SPOTS];
+
+// ---- the assembly panel --------------------------------------------------------------------
+
+/** Draws the craft being assembled, paused on the pad (or clears the view when nothing is built); `keepView` leaves the camera where it is. */
+function showBuild(text: string | null, keepView: boolean): string | null {
+  if (text === null) {
+    stopRun();
+    stage.clearCraft();
+    message = 'Nothing built yet: add a part.';
+    return null;
+  }
+  let flight;
+  try {
+    flight = prepareFlight(text);
+  } catch (e) {
+    return `Could not draw the craft: ${e instanceof Error ? e.message : String(e)}`;
+  }
+  const cam = camera.position.clone();
+  const target = controls.target.clone();
+  stopRun();
+  const world = new World(core);
+  const recorder = new Recorder(world);
+  const result = recorder.setup(flight.setup);
+  if (result.rejected > 0) {
+    world.free();
+    return `The core refused ${result.rejected} of the commands for this craft.`;
+  }
+  if (!openRun(world, 'fly', { kind: 'fly', flight, script: null, steps: null }, recorder, null, '', 0, 0)) return message;
+  if (keepView) {
+    camera.position.copy(cam);
+    controls.target.copy(target);
+    controls.update();
+  }
+  return null;
+}
+
+const builder = createBuilder({
+  stage,
+  show: showBuild,
+  fly: (text) => openCraft(text, 'built.craft.json'),
+});
 
 // ---- drawing -------------------------------------------------------------------------------
 
@@ -263,6 +305,7 @@ function startScenario(kind: ScenarioKind, until = -1): void {
     return;
   }
   lastStart = { kind, until };
+  builder.leave();
   openRun(world, kind, scenario, recorder, null, '', 0, until);
 }
 
@@ -424,6 +467,8 @@ function openCraft(text: string, name: string): void {
   }
   craftText = text;
   craftName = name;
+  builder.leave();
+  builder.loadText(text);
   startScenario('fly');
   if (run) message = `Loaded ${name}.`;
 }
@@ -486,7 +531,7 @@ function updateText(): void {
           : ' · matching the recording so far'
     : '';
   const of = p ? ` of ${run.total} (${run.label})` : '';
-  const what = run.kind === 'part' ? `part ${partSel.value}` : run.kind === 'drop' ? `drop ${dropSpeed} m/s at ${currentSpot().name}` : run.kind;
+  const what = builder.building ? 'assembling' : run.kind === 'part' ? `part ${partSel.value}` : run.kind === 'drop' ? `drop ${dropSpeed} m/s at ${currentSpot().name}` : run.kind;
   statusEl.innerHTML =
     `<b>${state}</b> · ${p ? 'replay' : what} · step ${run.step}${of} (${(run.step * STEP_SECONDS).toFixed(2)} s) · ${run.substeps} substeps · ` +
     (run.coreSteps > 0 ? `core ${(run.coreMs / run.coreSteps).toFixed(2)} ms/step (worst ${run.coreMsMax.toFixed(2)}) · ` : '') +
@@ -546,6 +591,7 @@ async function main(): Promise<void> {
   const craftRes = await fetch('./hopper.craft.json');
   if (!craftRes.ok) throw new Error(`could not load hopper.craft.json (${craftRes.status})`);
   craftText = await craftRes.text();
+  builder.loadText(craftText);
 
   rendererName = await stage.init();
 
@@ -603,7 +649,8 @@ async function main(): Promise<void> {
   });
   saveCraftBtn.addEventListener('click', () => {
     const part = run?.kind === 'part';
-    const size = download(part ? `${partSel.value}.craft.json` : craftName, part ? galleryCraft(partSel.value) : craftText, 'application/json');
+    const built = builder.building ? builder.panel.text() : null;
+    const size = download(built !== null ? 'built.craft.json' : part ? `${partSel.value}.craft.json` : craftName, built ?? (part ? galleryCraft(partSel.value) : craftText), 'application/json');
     message = `Saved the craft file (${size} bytes).`;
   });
   loadCraftInput.addEventListener('change', () => {
@@ -627,6 +674,7 @@ async function main(): Promise<void> {
     if (run) drawRun(run);
   });
   resetViewBtn.addEventListener('click', resetView);
+  $('build').addEventListener('click', () => (builder.isOpen ? builder.close() : builder.open()));
   window.addEventListener('resize', () => stage.resize());
   window.addEventListener('keydown', (e) => {
     if (e.target instanceof HTMLSelectElement || e.target instanceof HTMLInputElement) return;
@@ -641,7 +689,13 @@ async function main(): Promise<void> {
   });
 
   stage.resize();
-  if (params.get('replay') === 'sample') await replaySample(steps === null ? -1 : Math.max(0, Number(steps) | 0));
+  const buildParam = params.get('build');
+  // Test hook: where a free port's marker is on the page, so a headless browser can click it.
+  (window as unknown as { __ribcage: unknown }).__ribcage = { markerScreenPosition: (name: string) => builder.markerAt(name) };
+  if (buildParam !== null) {
+    builder.open();
+    if (buildParam === 'hopper') void builder.demo();
+  } else if (params.get('replay') === 'sample') await replaySample(steps === null ? -1 : Math.max(0, Number(steps) | 0));
   else {
     const until = steps !== null ? Math.max(0, Number(steps) | 0) : kind === 'hop' ? HOP_STEPS : kind === 'part' ? 0 : -1;
     if (kind === 'part' && partSel.value === '') partSel.value = GALLERY_PARTS[0]!.type;

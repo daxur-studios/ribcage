@@ -66,7 +66,8 @@ export interface CraftFile {
 }
 
 type Kind = 'number' | 'material' | 'section';
-interface Field {
+/** One parameter of a part type: its key, what kind of value it takes, and whether it may be left out. */
+export interface Field {
   key: string;
   kind: Kind;
   optional?: true;
@@ -99,7 +100,9 @@ const SCHEMAS: Readonly<Record<CraftPartType, readonly Field[]>> = {
   pod: [num('ringNodes'), num('bottomRadius'), num('topRadius'), num('height'), num('apexRise', true), material, num('memberArea'), num('mass'), num('nodeRadius', true)],
 };
 
-const PART_TYPES = Object.keys(SCHEMAS) as CraftPartType[];
+/** The parameter fields of each part type, in the order a file writes them (the assembly panel builds its form from these). */
+export const PART_FIELDS = SCHEMAS;
+export const PART_TYPES = Object.keys(SCHEMAS) as CraftPartType[];
 
 type Raw = Record<string, unknown>;
 

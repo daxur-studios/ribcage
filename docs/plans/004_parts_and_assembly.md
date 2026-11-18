@@ -86,7 +86,7 @@ Roadmap checks: "generated from parameters" in 4.3; "join at rings, saved and lo
   **Test:** in Node, the key-to-command mapping and the follow camera maths; in the browser (headless), after the scripted hop the page shows the same hash as Node; no console errors. By eye: the hopper lifts off on full throttle, and the hard landing snaps a leg and tips it over, with stress colours on the snapping leg.
   Demo: lift-off and the hard landing, with a slow-motion stress view of the snap (the slice demo; it becomes the milestone demo in 4.11).
 
-- [ ] **4.10 Assembly panel.** Build with: Sonnet.
+- [x] **4.10 Assembly panel.** Build with: Sonnet.
   A small panel on the craft page: pick a part type and its parameters, click a free ring or mount patch to attach it, turn it by clock steps, remove the last part; refusals shown with their reasons; the craft saved and loaded as a craft file. Parts appear placed one after another (render only).
   **Test:** in Node, the panel's actions produce the same craft file as building the hopper in code; in the browser (headless), assembling the hopper by clicks and flying it gives the same hash as the fixture.
   Demo: assembling the hopper part by part, then launching it.
