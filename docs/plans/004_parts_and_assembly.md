@@ -71,7 +71,7 @@ Roadmap checks: "generated from parameters" in 4.3; "join at rings, saved and lo
   **Test:** two free nodes with a thruster between them, no gravity, accelerate at `T / (m_a + m_b)` within rounding along the head direction; throttle 0 gives no force; a deleted node turns its thruster off; bad records (same node twice, dead node, non-finite or negative thrust, throttle outside 0 to 1, unknown thruster) are rejected and the rest of the batch applies; the committed `weak-bridge.rcrd` (ABI 2) and `tower-collapse.rcrd` (ABI 3) replay to their hashes; a thrusting scene hashes the same natively and in WebAssembly.
   Demo: skip.
 
-- [ ] **4.7 Lift-off, headless.** Build with: Sonnet.
+- [x] **4.7 Lift-off, headless.** Build with: Sonnet.
   The landing field in `src/terrain.ts`; a scenario module (`src/flight.ts`) that places a craft file on the pad and plays a throttle script as commands, step by step, like `liveBridgeCommands`. Ticks the roadmap check "engines produce thrust and the craft lifts off" (seen in 4.9).
   **Test** (`test/flight.test.ts`): the hopper rests on the pad; at full throttle from step 60 its pod's height gain after 3 s is within 5% of `½ (T/M − g) t²`, the craft tilts less than 5°, nothing yields; at a throttle just under hover (`T·throttle < M·g`) it stays on the pad; the same script run twice gives the same hash. `scene_stats` (or a Node timing script) reports nodes, beams, substeps, contacts and ms per step for the hopper standing and lifting off.
   Demo: skip (shown in 4.9).

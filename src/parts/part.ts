@@ -174,7 +174,7 @@ export function resolveBeam(part: Part, beam: PartBeam): ResolvedBeam {
 
 /**
  * Appends the part to `batch`: its nodes in order (so node `i` of the part is node `i` of an empty
- * world), then its beams in order. Thrusters are not emitted yet: the core learns them in phase 4.6.
+ * world), then its beams in order, then its thrusters in order.
  */
 export function compilePart(batch: CommandBatch, part: Part): void {
   for (const [i, n] of part.nodes.entries()) {
@@ -185,6 +185,9 @@ export function compilePart(batch: CommandBatch, part: Part): void {
     const r = resolveBeam(part, b);
     batch.addBeam(b.a, b.b, { rest: r.rest, compliance: r.compliance, damping: r.damping, yieldStrain: r.yieldStrain, breakStrain: r.breakStrain });
   }
+  // Thrusters last, so the nodes and beams keep their indices; thruster `i` of the part is
+  // thruster `i` of an empty world, throttle zero until a command sets it.
+  for (const t of part.thrusters) batch.addThruster(t.tail, t.head, t.maxThrust);
 }
 
 /** Total mass in kilograms: the node masses added in index order, so the same part always gives the same sum. */

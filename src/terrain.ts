@@ -136,3 +136,30 @@ export function valleyTerrain(): Terrain {
     return h;
   });
 }
+
+/** Half the side, in metres, of the dead-flat landing pad at the middle of the landing field. */
+export const LANDING_PAD_HALF = 8;
+
+/**
+ * The landing field for the craft tests: 61 by 61 points, 1 m apart, from -30 to 30 on both axes.
+ * Dead flat at height zero within `LANDING_PAD_HALF` of the origin (a square pad), then a smooth
+ * rise into a few low hills beyond it (up to 1.2 m), so a craft that drifts off the pad lands on
+ * a slope.
+ */
+export function landingField(): Terrain {
+  const hills: [number, number, number, number][] = [
+    [18, 6, 7, 1.2],
+    [-17, -12, 8, 1.0],
+    [5, -20, 7, 0.8],
+    [-15, 16, 6, 0.9],
+  ];
+  return fill(flatTerrain(61, 61, -30, -30, 1), (x, z) => {
+    const ax = x < 0 ? -x : x;
+    const az = z < 0 ? -z : z;
+    const out = (ax > az ? ax : az) - LANDING_PAD_HALF;
+    const ramp = smoothstep(out / 6);
+    let h = 0;
+    for (const [cx, cz, r, hh] of hills) h += bump(x, z, cx, cz, r, hh);
+    return h * ramp;
+  });
+}
