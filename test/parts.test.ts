@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 import { CommandBatch } from "../src/commands.ts";
-import { Core, EVENT_BREAK, EVENT_FREEZE, EVENT_YIELD } from "../src/core.ts";
+import { BEAM_BROKEN, Core, EVENT_BREAK, EVENT_FREEZE, EVENT_YIELD } from "../src/core.ts";
 import { GRAVITY } from "../src/design.ts";
 import { MATERIALS, STIFFNESS_SCALE, dampingFor, member, reducedMass, type MaterialId } from "../src/parts/material.ts";
 import {
@@ -18,6 +18,9 @@ import {
   resolveBeam,
   type Part,
 } from "../src/parts/part.ts";
+import { engine, type EngineParams } from "../src/parts/engine.ts";
+import { leg, type LegParams } from "../src/parts/leg.ts";
+import { pod, type PodParams } from "../src/parts/pod.ts";
 import { RING_COUNTS, ringPoint, unitCosSin, distributeMass } from "../src/parts/shared.ts";
 import { ringBracing, tank, type TankParams } from "../src/parts/tank.ts";
 import { truss, type TrussParams } from "../src/parts/truss.ts";
@@ -413,6 +416,41 @@ const SWEEP: SweepCase[] = [
   ...TRUSSES.map((p, i): SweepCase => ({ name: `truss ${i} (${p.section}, ${p.bays} bays, ${p.material})`, build: () => truss(p), stated: p.mass!, poses: p.length <= 2 * p.width ? ["standing", "on its side"] : ["on its side"] })),
 ];
 
+// The hopper's own parts (ER 004), and a few other shapes, for the checks every part must pass.
+const ENGINES: EngineParams[] = [
+  { ringNodes: 8, topRadius: 1, nozzleRadius: 0.5, height: 1, material: "steel", memberArea: 4e-4, mass: 800, maxThrust: 80e3 },
+  { ringNodes: 4, topRadius: 0.4, nozzleRadius: 0.8, height: 0.8, material: "aluminium", memberArea: 2e-4, mass: 300, maxThrust: 20e3 },
+  { ringNodes: 12, topRadius: 1.2, nozzleRadius: 0.6, height: 1.5, material: "steel", memberArea: 3e-4, mass: 1000, maxThrust: 100e3 },
+];
+const PODS: PodParams[] = [
+  { ringNodes: 8, bottomRadius: 1, topRadius: 0.6, height: 1.2, material: "aluminium", memberArea: 4e-4, mass: 1200 },
+  { ringNodes: 6, bottomRadius: 0.7, topRadius: 0.4, height: 1, apexRise: 0.5, material: "carbon", memberArea: 2e-4, mass: 600 },
+  { ringNodes: 16, bottomRadius: 1.4, topRadius: 0.8, height: 1.5, material: "aluminium", memberArea: 3e-4, mass: 1800 },
+];
+/** The hopper's leg: 45 kN crush force over 0.3 m, a spring that reaches it after 0.12 m (ER 004). */
+const LEG: LegParams = {
+  length: 2.4,
+  footOffset: 1.2,
+  footSize: 0.35,
+  mountWidth: 0.35,
+  mountHeight: 0.35,
+  bodyWidth: 0.7,
+  material: "aluminium",
+  memberArea: 2e-4,
+  mass: 150,
+  sprungStiffness: 5e5,
+  sprungStroke: 0.12,
+  crushForce: 45e3,
+  crushStroke: 0.3,
+};
+const LEGS: LegParams[] = [LEG, { ...LEG, footOffset: 0.6, crushForce: 30e3, crushStroke: 0.2, mass: 120 }];
+
+const PARTS: SweepCase[] = [
+  ...ENGINES.map((p, i): SweepCase => ({ name: `engine ${i} (${p.ringNodes} nodes, ${p.material})`, build: () => engine(p), stated: p.mass, poses: ["standing"] })),
+  ...PODS.map((p, i): SweepCase => ({ name: `pod ${i} (${p.ringNodes} nodes, ${p.material})`, build: () => pod(p), stated: p.mass, poses: ["standing"] })),
+  ...LEGS.map((p, i): SweepCase => ({ name: `leg ${i} (offset ${p.footOffset} m, ${p.crushForce} N)`, build: () => leg(p), stated: p.mass, poses: ["on its side"] })),
+];
+
 /** The part turned so its axis is along x and lying on a wall face, just above the ground. */
 function onItsSide(part: Part): Part {
   const low = Math.min(...part.nodes.map((n) => n.z));
@@ -448,7 +486,7 @@ test("the ring table gives unit vectors, exactly opposite points, and refuses ot
   assert.deepEqual([...ringPoint(4, 1, 2)], [0, 2]);
 });
 
-for (const c of SWEEP) {
+for (const c of [...SWEEP, ...PARTS]) {
   test(`${c.name}: compiles, mass is exactly the stated mass, within the budget, same bytes twice`, async () => {
     const part = c.build();
     const batch = new CommandBatch();
@@ -740,3 +778,236 @@ for (const idx of [0, 2, 4, 5]) {
     assert.ok(Math.abs(l.deflection) > 5 * r.deflection, `without ring bracing it squeezed ${l.deflection} m against ${r.deflection} m`);
   });
 }
+
+// ---------------------------------------------------------------------------------------------
+// Leg, engine and pod generators (phase 4.3)
+
+/** The crush bay's beams in a leg: after 30 ring beams and the upper leg's 12, twelve of them. */
+const CRUSH_BEAMS: readonly [number, number] = [42, 54];
+const inCrush = (beam: number): boolean => beam >= CRUSH_BEAMS[0] && beam < CRUSH_BEAMS[1];
+
+interface Press {
+  /** Yield and break events in order: `[kind, beam, step, force over the crush force]`. */
+  events: [number, number, number, number][];
+  /** How far the crush bay has shortened after each step, in metres. */
+  crush: number[];
+  /** How many of the crush bay's beams are broken after each step. */
+  broken: number[];
+}
+
+/**
+ * A headless press: the mount pinned, gravity cancelled, a force along the leg's axis on the four foot
+ * nodes, rising linearly to `peak` times the crush force over `ramp` steps and then held for `hold`
+ * more. The foot is held square to the axis by stiff guides that give no push along it, the way a
+ * press's platen would; without them a leg pushed on its end at 45 kN folds sideways at its soft bays
+ * (ER 004).
+ */
+function pressLeg(core: Core, p: LegParams, peak: number, ramp: number, hold: number): Press {
+  const part = leg(p);
+  const world = new World(core);
+  const build = new CommandBatch();
+  compilePart(build, part);
+  for (let i = 0; i < 4; i++) build.setInvMass(i, 0);
+  assert.equal(world.apply(build).rejected, 0);
+  const drop = Math.sqrt(p.length * p.length - p.footOffset * p.footOffset);
+  const u = [p.footOffset / p.length, -drop / p.length];
+  const across = [drop / p.length, p.footOffset / p.length, 0];
+  const guides = new CommandBatch();
+  const at = world.positions();
+  const reach = 50;
+  const stiffness = 3e6;
+  let next = part.nodes.length;
+  for (let i = 16; i < 20; i++) {
+    for (const dir of [across, [0, 0, 1]]) {
+      guides.addNode(at[i * 3]! + reach * dir[0]!, at[i * 3 + 1]! + reach * dir[1]!, at[i * 3 + 2]! + reach * dir[2]!, 0, 0.01);
+      guides.addBeam(i, next++, { rest: reach, compliance: 1 / stiffness, damping: 0, yieldStrain: 1e9, breakStrain: 1e9 });
+    }
+  }
+  assert.equal(world.apply(guides).rejected, 0);
+  const centre = (pos: Float64Array, k: number): number[] => [0, 1, 2].map((a) => (pos[4 * k * 3 + a]! + pos[(4 * k + 1) * 3 + a]! + pos[(4 * k + 2) * 3 + a]! + pos[(4 * k + 3) * 3 + a]!) / 4);
+  const gap = (pos: Float64Array): number => {
+    const a = centre(pos, 1);
+    const b = centre(pos, 2);
+    return Math.sqrt((a[0]! - b[0]!) ** 2 + (a[1]! - b[1]!) ** 2 + (a[2]! - b[2]!) ** 2);
+  };
+  const gap0 = gap(world.positions());
+  const out: Press = { events: [], crush: [], broken: [] };
+  for (let s = 0; s < ramp + hold; s++) {
+    const f = p.crushForce * (s < ramp ? (peak * (s + 1)) / ramp : peak);
+    const cmds = new CommandBatch();
+    for (const [i, n] of part.nodes.entries()) cmds.addForce(i, 0, n.mass * GRAVITY, 0);
+    for (let i = 16; i < 20; i++) cmds.addForce(i, (-u[0]! * f) / 4, (-u[1]! * f) / 4, 0);
+    assert.equal(world.apply(cmds).rejected, 0);
+    world.step();
+    for (const e of world.events()) if (e.kind === EVENT_YIELD || e.kind === EVENT_BREAK) out.events.push([e.kind, e.index, s, f / p.crushForce]);
+    out.crush.push(gap0 - gap(world.positions()));
+    out.broken.push(Array.from(world.snapshot().beams.flags.slice(CRUSH_BEAMS[0], CRUSH_BEAMS[1])).filter((fl) => (fl & BEAM_BROKEN) !== 0).length);
+  }
+  world.free();
+  return out;
+}
+
+test("a leg pressed along its axis stays elastic below the crush force", async () => {
+  const core = await loadCore();
+  for (const p of LEGS) {
+    const r = pressLeg(core, p, 0.9, 1600, 200);
+    assert.deepEqual(r.events, [], "no yield and no break below the crush force");
+    const last = r.crush[r.crush.length - 1]!;
+    assert.ok(last > 0 && last < 0.08 * p.crushStroke, `crush bay shortened ${last} m, an elastic amount`);
+  }
+});
+
+test("a leg pressed past the crush force gives way in the crush bay first and nowhere else, then the crush bay breaks", async () => {
+  const core = await loadCore();
+  for (const p of LEGS) {
+    const r = pressLeg(core, p, 1.1, 1800, 1200);
+    const yields = r.events.filter((e) => e[0] === EVENT_YIELD);
+    const breaks = r.events.filter((e) => e[0] === EVENT_BREAK);
+    assert.ok(yields.length > 0 && breaks.length > 0, "the crush bay yields and then breaks");
+    const firstYield = yields[0]!;
+    const firstBreak = breaks[0]!;
+    assert.ok(inCrush(firstYield[1]), `first yield is beam ${firstYield[1]}, outside the crush bay`);
+    assert.ok(firstYield[3] >= 0.9 && firstYield[3] <= 1.05, `first yield at ${firstYield[3]} of the crush force`);
+    assert.ok(inCrush(firstBreak[1]), `first break is beam ${firstBreak[1]}, outside the crush bay`);
+    // The upper leg, the spring, the foot and every ring outlast the crush bay: nothing outside it
+    // yields or breaks until it has broken.
+    for (const e of r.events) if (e[2] <= firstBreak[2]) assert.ok(inCrush(e[1]), `beam ${e[1]} outside the crush bay had an event (${e[0]}) at step ${e[2]}`);
+    // It crushes a good part of its stroke before it breaks, and the bay is gone after.
+    assert.ok(r.crush[firstBreak[2]]! >= 0.25 * p.crushStroke, `broke after ${r.crush[firstBreak[2]]} m of a ${p.crushStroke} m stroke`);
+    assert.ok(r.broken[r.broken.length - 1]! >= 4, "the bay is broken through");
+  }
+});
+
+/** Applies `apply`'s forces for 600 steps, ramped in smoothly, and reports yields and breaks and the final speed. */
+function holdThrust(core: Core, part: Part, apply: (cmds: CommandBatch, f: number) => void, peak: number, pinned: number[] = []): { failures: number; fastest: number } {
+  const world = new World(core);
+  const build = new CommandBatch();
+  compilePart(build, part);
+  for (const i of pinned) build.setInvMass(i, 0);
+  assert.equal(world.apply(build).rejected, 0);
+  let failures = 0;
+  let prev = world.positions();
+  let fastest = 0;
+  const ramp = 90;
+  for (let s = 0; s < 600; s++) {
+    const u = Math.min(1, (s + 1) / ramp);
+    const cmds = new CommandBatch();
+    apply(cmds, peak * u * u * (3 - 2 * u));
+    assert.equal(world.apply(cmds).rejected, 0);
+    world.step();
+    failures += world.events().filter((e) => e.kind === EVENT_YIELD || e.kind === EVENT_BREAK).length;
+    const now = world.positions();
+    if (s === 599) {
+      for (let i = 0; i < now.length; i += 3) fastest = Math.max(fastest, Math.sqrt((now[i]! - prev[i]!) ** 2 + (now[i + 1]! - prev[i + 1]!) ** 2 + (now[i + 2]! - prev[i + 2]!) ** 2) / STEP);
+    }
+    prev = now;
+  }
+  world.free();
+  return { failures, fastest };
+}
+
+test("the engine carries the hopper's full thrust through its lattice with no yield", async () => {
+  const core = await loadCore();
+  const p = ENGINES[0]!;
+  const part = engine(p);
+  const n = p.ringNodes;
+  assert.deepEqual(part.thrusters, [{ tail: 2 * n, head: 2 * n + 1, maxThrust: p.maxThrust }]);
+  // The thruster pushes half of the thrust on the head and half on the tail; the tank above holds the
+  // top ring, which is pinned. (Balancing the thrust with forces on the top ring instead leaves a free
+  // body that tumbles under fixed-direction loads: ER 004.) The engine's own weight is cancelled.
+  const r = holdThrust(
+    core,
+    part,
+    (cmds, f) => {
+      for (const [i, node] of part.nodes.entries()) cmds.addForce(i, 0, node.mass * GRAVITY, 0);
+      cmds.addForce(2 * n, 0, f / 2, 0);
+      cmds.addForce(2 * n + 1, 0, f / 2, 0);
+    },
+    p.maxThrust,
+    Array.from({ length: n }, (_, j) => n + j),
+  );
+  assert.equal(r.failures, 0, "no yield or break at full thrust");
+  assert.ok(r.fastest < 1e-3, `still moving at ${r.fastest} m/s`);
+});
+
+test("the pod carries the hopper's full thrust through its lattice with no yield", async () => {
+  const core = await loadCore();
+  const p = PODS[0]!;
+  const part = pod(p);
+  // The whole 80 kN pushes up on the bottom ring and the pod accelerates freely at T / m: a harder
+  // load than it will ever carry, since the pod rides on the rest of the craft.
+  const r = holdThrust(
+    core,
+    part,
+    (cmds, f) => {
+      for (const [i, node] of part.nodes.entries()) cmds.addForce(i, 0, node.mass * GRAVITY, 0);
+      for (let j = 0; j < p.ringNodes; j++) cmds.addForce(j, 0, f / p.ringNodes, 0);
+    },
+    ENGINES[0]!.maxThrust,
+  );
+  assert.equal(r.failures, 0, "no yield or break at full thrust");
+});
+
+test("an engine's and a pod's panels: one per wall quad, the pod's nose one per facet, none flat", () => {
+  for (const [part, n, nose] of [[engine(ENGINES[0]!), ENGINES[0]!.ringNodes, 0], [pod(PODS[0]!), PODS[0]!.ringNodes, PODS[0]!.ringNodes]] as const) {
+    assert.equal(part.panels.length, n + nose);
+    for (const [q, cell] of part.panels.entries()) {
+      const tets = q < n ? 4 : 3;
+      assert.equal(cell.tets.length, tets, `panel ${q} has ${tets} tetrahedra`);
+      for (const tet of cell.tets) {
+        const [p0, p1, p2, p3] = [part.nodes[tet[0]]!, part.nodes[tet[1]]!, part.nodes[tet[2]]!, part.nodes[tet[3]]!];
+        const e1 = [p1.x - p0.x, p1.y - p0.y, p1.z - p0.z] as const;
+        const e2 = [p2.x - p0.x, p2.y - p0.y, p2.z - p0.z] as const;
+        const e3 = [p3.x - p0.x, p3.y - p0.y, p3.z - p0.z] as const;
+        const det = e1[0] * (e2[1] * e3[2] - e2[2] * e3[1]) + e1[1] * (e2[2] * e3[0] - e2[0] * e3[2]) + e1[2] * (e2[0] * e3[1] - e2[1] * e3[0]);
+        const len = (v: readonly [number, number, number]): number => Math.sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]);
+        assert.ok(Math.abs(det) > 1e-6 * len(e1) * len(e2) * len(e3), `panel ${q}: a flat tetrahedron`);
+      }
+    }
+  }
+});
+
+test("engine, pod and leg: shape, attachments and never-live flags", () => {
+  const e = engine(ENGINES[0]!);
+  assert.equal(e.nodes.length, 18, "two rings of 8, a tail and a head");
+  assert.deepEqual(e.rings.map((r) => r.id), ["top"]);
+  assert.deepEqual([...e.rings[0]!.axis], [0, 1, 0]);
+  assert.ok(e.segments.every((s) => s.neverLive));
+  assert.ok(e.nodes[16]!.x === 0 && e.nodes[16]!.y === 0 && e.nodes[17]!.x === 0 && e.nodes[17]!.y === 1, "tail on the axis at the nozzle, head on the axis at the top");
+  const q = pod(PODS[0]!);
+  assert.equal(q.nodes.length, 17, "two rings of 8 and the apex");
+  assert.deepEqual(q.rings.map((r) => r.id), ["bottom"]);
+  assert.deepEqual([...q.rings[0]!.axis], [0, -1, 0]);
+  assert.ok(q.segments.every((s) => s.neverLive));
+  assert.ok(q.nodes[16]!.x === 0 && q.nodes[16]!.y > PODS[0]!.height, "the apex is above the top ring");
+  const l = leg(LEG);
+  assert.equal(l.nodes.length, 20);
+  assert.equal(l.segments.length, 1);
+  assert.ok(!l.segments[0]!.neverLive);
+  assert.deepEqual(l.patches.map((m) => m.id), ["mount"]);
+  assert.equal(l.rings.length, 0);
+  const foot = [16, 17, 18, 19].map((i) => l.nodes[i]!);
+  const mid = (k: "x" | "y" | "z"): number => foot.reduce((s, v) => s + v[k], 0) / 4;
+  assert.ok(Math.abs(mid("x") - LEG.footOffset) < 1e-12 && Math.abs(Math.sqrt(mid("x") ** 2 + mid("y") ** 2) - LEG.length) < 1e-12, "the foot is `length` from the mount's centre");
+  assert.ok(Math.abs(Math.max(...foot.map((v) => v.x)) - Math.min(...foot.map((v) => v.x)) - LEG.footSize) < 1e-12, "the foot's square");
+});
+
+test("the new generators refuse what cannot work, with the reason", () => {
+  const e = ENGINES[0]!;
+  assert.throws(() => engine({ ...e, ringNodes: 5 }), /ring has 5 nodes/);
+  assert.throws(() => engine({ ...e, maxThrust: 0 }), /thrust/);
+  assert.throws(() => engine({ ...e, height: 0 }), /height/);
+  assert.throws(() => engine({ ...e, mass: 10 }), /below the members' own mass/);
+  const q = PODS[0]!;
+  assert.throws(() => pod({ ...q, ringNodes: 10 }), /ring has 10 nodes/);
+  assert.throws(() => pod({ ...q, apexRise: 0 }), /apex rise/);
+  assert.throws(() => pod({ ...q, topRadius: -1 }), /top radius/);
+  assert.throws(() => pod({ ...q, mass: 10 }), /below the members' own mass/);
+  assert.throws(() => leg({ ...LEG, length: 0 }), /length/);
+  assert.throws(() => leg({ ...LEG, footOffset: 2.4 }), /foot offset/);
+  assert.throws(() => leg({ ...LEG, footOffset: -1 }), /foot offset/);
+  assert.throws(() => leg({ ...LEG, crushStroke: 1 }), /upper leg would be/);
+  assert.throws(() => leg({ ...LEG, sprungStiffness: 1e4 }), /would yield/);
+  assert.throws(() => leg({ ...LEG, memberArea: 2e-5 }), /give the members an area of at least/);
+  assert.throws(() => leg({ ...LEG, mass: 1 }), /below the members' own mass/);
+});

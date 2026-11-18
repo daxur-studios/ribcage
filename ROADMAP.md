@@ -1,6 +1,6 @@
 # ribcage roadmap
 
-**TL;DR.** Overall progress: **32%**. Now: milestones 1 (solver core and tools), 2 (2D bridge builder) are complete, and so is milestone 3 (3D on terrain in Three.js): terrain, ground contact, a tower and a bridge that stand and collapse, the Three.js page with time controls, record and replay and panels skinned to the nodes (see [Plan 003](docs/plans/003_terrain_3d.md)). Now building milestone 4 (parts and assembly), planned in [Plan 004](docs/plans/004_parts_and_assembly.md). First playable slice ends at milestone 4.
+**TL;DR.** Overall progress: **35%**. Now: milestones 1 (solver core and tools), 2 (2D bridge builder) are complete, and so is milestone 3 (3D on terrain in Three.js): terrain, ground contact, a tower and a bridge that stand and collapse, the Three.js page with time controls, record and replay and panels skinned to the nodes (see [Plan 003](docs/plans/003_terrain_3d.md)). Now building milestone 4 (parts and assembly), planned in [Plan 004](docs/plans/004_parts_and_assembly.md). First playable slice ends at milestone 4.
 
 This page is the single answer to "what are we building, and how far along is it?". The design is the [spec](docs/research/node-beam-engine-design-spec.md). The detailed work for the current milestone lives in its plan.
 
@@ -22,13 +22,13 @@ Each milestone has a weight (its share of the whole) and a short list of checks.
 | 1 | Solver core and tools | 12 | 100% | done |
 | 2 | 2D bridge builder | 8 | 100% | done |
 | 3 | 3D on terrain in Three.js | 10 | 100% | done |
-| 4 | Parts and assembly (first playable slice) | 12 | 0% | |
+| 4 | Parts and assembly (first playable slice) | 12 | 25% | |
 | 5 | Rigid by default | 16 | 0% | |
 | 6 | Aerodynamics | 10 | 0% | |
 | 7 | Ground and water | 10 | 0% | |
 | 8 | Craft-against-craft collision and threads | 12 | 0% | |
 | 9 | Visual layer | 8 | 0% | |
-| | **Overall** | **100** | **32%** | |
+| | **Overall** | **100** | **35%** | |
 
 ## Who plans and builds what
 
@@ -83,7 +83,7 @@ Planning has two stages. The costly-to-redo milestones (5 and 8) have an early d
 
 ### 4. Parts and assembly (first playable slice) ([Plan 004](docs/plans/004_parts_and_assembly.md))
 
-- [ ] Tank, truss, landing leg, engine and pod are generated from parameters.
+- [x] Tank, truss, landing leg, engine and pod are generated from parameters. (`src/parts/`: each part compiles, has its exact stated mass, is inside the budget, rests on flat ground for 10 s with no yield and is byte-identical run twice; the leg stays elastic below its crush force, crushes at about that force and then breaks in the crush bay; the engine and the pod carry the hopper's full thrust with no yield; see ER 004, phases 4.2 and 4.3.)
 - [ ] Parts join at attachment rings into one craft, saved and loaded as a craft file.
 - [ ] Engines produce thrust and the craft lifts off.
 - [ ] **Test of fun:** a hard landing on rough terrain snaps a leg and the craft tips over.

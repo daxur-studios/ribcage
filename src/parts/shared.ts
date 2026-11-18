@@ -128,6 +128,57 @@ export function distributeMass(part: Part, stated: number | null): void {
   if (partMass(part) !== stated) throw new Error(`the node masses cannot be made to add up to ${stated} kg exactly`);
 }
 
+/**
+ * The in-ring members of an `n`-gon, so a ring keeps its shape in its plane: the perimeter, the
+ * chords that skip one node (a closed strip of triangles, which is rigid), for 12 nodes and more
+ * the quarter chords (skip `n / 4`), and the diameters. Each pair once, in a fixed order.
+ */
+export function ringBracing(n: number): [number, number][] {
+  const pairs: [number, number][] = [];
+  const seen = new Set<number>();
+  const add = (a: number, b: number): void => {
+    const lo = Math.min(a, b);
+    const hi = Math.max(a, b);
+    const key = lo * n + hi;
+    if (seen.has(key)) return;
+    seen.add(key);
+    pairs.push([a, b]);
+  };
+  for (let j = 0; j < n; j++) add(j, (j + 1) % n);
+  for (let j = 0; j < n; j++) add(j, (j + 2) % n);
+  // From 12 nodes on, the skip-one chords make near-flat triangles (150° and more) and the ring
+  // can buckle under the tank's own weight; quarter chords (skip n / 4) make right triangles with
+  // the diameters and keep it stiff (ER 004, phase 4.2).
+  if (n >= 12) for (let j = 0; j < n; j++) add(j, (j + n / 4) % n);
+  for (let j = 0; j < n / 2; j++) add(j, j + n / 2);
+  return pairs;
+}
+
+/**
+ * The wall between two rings of `n` nodes whose nodes are `lo + j` and `hi + j`: for every wall quad
+ * the longitudinal member and **both** diagonals (ER 001), the quad's four tetrahedra for its skin
+ * panel, and (with a `patchPrefix`) a mount patch. Beams go through `beam`; patches and cells are
+ * appended to `part`.
+ */
+function addWall(part: Part, n: number, lo: number, hi: number, beam: (a: number, b: number) => void, patchPrefix: string | null, bay: number): void {
+  const off = Math.max(2, n >> 1);
+  const at = (base: number, j: number): number => base + (((j % n) + n) % n);
+  for (let j = 0; j < n; j++) {
+    const a = at(lo, j);
+    const b = at(lo, j + 1);
+    const c = at(hi, j);
+    const d = at(hi, j + 1);
+    beam(a, c);
+    beam(a, d);
+    beam(b, c);
+    const xk = at(lo, j + off);
+    const xk1 = at(hi, j + off);
+    const cell: SkinCell = { tets: [[a, b, c, xk], [b, a, d, xk], [c, d, a, xk1], [d, c, b, xk1]] };
+    part.panels.push(cell);
+    if (patchPrefix !== null) part.patches.push({ id: `${patchPrefix}-${bay}-${j}`, nodes: [a, b, c, d] });
+  }
+}
+
 export interface TubeSpec {
   /** Part type name. */
   type: string;
@@ -180,24 +231,7 @@ export function buildTube(s: TubeSpec): Part {
     part.beams.push({ a, b, material: s.material, area: s.area, zeta: ZETA_STRUCTURE, ring });
   };
   for (let k = 0; k < s.rings; k++) for (const [a, b] of s.ringBeams) beam(node(k, a), node(k, b), true);
-  const off = Math.max(2, n >> 1);
-  for (let k = 0; k < s.rings - 1; k++) {
-    const tets: SkinCell[] = [];
-    for (let j = 0; j < n; j++) {
-      const a = node(k, j);
-      const b = node(k, j + 1);
-      const c = node(k + 1, j);
-      const d = node(k + 1, j + 1);
-      beam(a, c, false);
-      beam(a, d, false);
-      beam(b, c, false);
-      const xk = node(k, j + off);
-      const xk1 = node(k + 1, j + off);
-      tets.push({ tets: [[a, b, c, xk], [b, a, d, xk], [c, d, a, xk1], [d, c, b, xk1]] });
-      part.patches.push({ id: `side-${k}-${j}`, nodes: [a, b, c, d] });
-    }
-    part.panels.push(...tets);
-  }
+  for (let k = 0; k < s.rings - 1; k++) addWall(part, n, k * n, (k + 1) * n, (a, b) => beam(a, b, false), 'side', k);
   // Seams: the longitudinals of bay b cross between segments b − 1 and b.
   for (let k = 1; k < s.rings - 1; k++) {
     let cx = 0;
@@ -223,6 +257,75 @@ export function buildTube(s: TubeSpec): Part {
   part.rings.push({ id: 'bottom', nodes: ringNodes(0), centre: [0, 0, 0], axis: down, radius: s.sectionRadius });
   part.rings.push({ id: 'top', nodes: ringNodes(s.rings - 1), centre: [0, top, 0], axis: up, radius: s.sectionRadius });
   part.capsule = { a: [0, 0, 0], b: [0, top, 0], radius: s.sectionRadius };
+  distributeMass(part, s.mass);
+  return part;
+}
+
+/** A node on the axis of a frustum, joined by one member to every node of the rings it names. */
+export interface AxisNode {
+  /** Height above the lower ring in metres. */
+  y: number;
+  joins: ReadonlyArray<'lower' | 'upper'>;
+}
+
+export interface FrustumSpec {
+  /** Part type name. */
+  type: string;
+  count: RingCount;
+  lowerRadius: number;
+  upperRadius: number;
+  /** Distance from the lower ring to the upper ring. */
+  height: number;
+  /** The ring the part is joined at: its attachment ring is called `attachId`. */
+  attach: 'lower' | 'upper';
+  attachId: string;
+  /** Nodes on the axis, in order after the two rings (the lower ring is nodes 0..n−1, the upper n..2n−1). */
+  axisNodes: ReadonlyArray<AxisNode>;
+  material: MaterialId;
+  /** Cross-section area of every member. */
+  area: number;
+  nodeRadius: number;
+  /** Stated mass in kilograms (at least the members' own). */
+  mass: number;
+  /** True for a part that must never be simulated as a live lattice once rigid bodies exist (engine, pod). */
+  neverLive: boolean;
+}
+
+/**
+ * A cone frustum on the y axis (two rings of `count` nodes, the lower at y = 0) with braced rings,
+ * the wall between them (both diagonals in every wall quad, one skin panel per quad), nodes on the
+ * axis joined by spokes, one segment, and one attachment ring. Used by the engine bell and the pod.
+ */
+export function buildFrustum(s: FrustumSpec): Part {
+  const n = s.count;
+  const part = emptyPart(s.type);
+  part.segments.push({ neverLive: s.neverLive });
+  for (const [k, r] of [s.lowerRadius, s.upperRadius].entries()) {
+    for (let j = 0; j < n; j++) {
+      const [x, z] = ringPoint(s.count, j, r);
+      part.nodes.push({ x, y: k === 0 ? 0 : s.height, z, mass: 0, radius: s.nodeRadius, segment: 0 });
+    }
+  }
+  const axisFirst = part.nodes.length;
+  for (const a of s.axisNodes) part.nodes.push({ x: 0, y: a.y, z: 0, mass: 0, radius: s.nodeRadius, segment: 0 });
+  const beam = (a: number, b: number, ring: boolean): void => {
+    part.beams.push({ a, b, material: s.material, area: s.area, zeta: ZETA_STRUCTURE, ring });
+  };
+  const bracing = ringBracing(n);
+  for (const base of [0, n]) for (const [a, b] of bracing) beam(base + a, base + b, true);
+  addWall(part, n, 0, n, (a, b) => beam(a, b, false), null, 0);
+  for (const [i, a] of s.axisNodes.entries()) {
+    for (const ring of a.joins) for (let j = 0; j < n; j++) beam(axisFirst + i, (ring === 'lower' ? 0 : n) + j, false);
+  }
+  const lower = s.attach === 'lower';
+  part.rings.push({
+    id: s.attachId,
+    nodes: Array.from({ length: n }, (_, j) => (lower ? 0 : n) + j),
+    centre: [0, lower ? 0 : s.height, 0],
+    axis: lower ? [0, -1, 0] : [0, 1, 0],
+    radius: lower ? s.lowerRadius : s.upperRadius,
+  });
+  part.capsule = { a: [0, 0, 0], b: [0, s.height, 0], radius: Math.max(s.lowerRadius, s.upperRadius) };
   distributeMass(part, s.mass);
   return part;
 }
