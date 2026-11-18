@@ -50,7 +50,7 @@ const dot = (a: V, b: V): number => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
 const pt = (p: Point3): V => [p.x, p.y, p.z];
 
 /** Collects boxes as flat-shaded triangles: four vertices and one normal per face. */
-class PanelBuilder {
+export class PanelBuilder {
   positions: number[] = [];
   normals: number[] = [];
   colours: number[] = [];
@@ -86,6 +86,44 @@ class PanelBuilder {
         this.cellOf.push(cell);
       }
       this.indices.push(base, base + 1, base + 2, base, base + 2, base + 3);
+    }
+  }
+
+  /**
+   * A slab on a flat triangle or quad `base` (corners in order round it): the polygon pushed along
+   * the unit vector `out` by `from` and by `to`, with a flat face on each side. Faces are wound outward.
+   */
+  prism(cell: number, base: readonly V[], out: V, from: number, to: number, rgb: readonly [number, number, number]): void {
+    this.panelStart.push(this.cellOf.length);
+    const lower = base.map((p) => add(p, mul(out, from)));
+    const upper = base.map((p) => add(p, mul(out, to)));
+    const n = base.length;
+    const faces: V[][] = [lower, upper];
+    for (let i = 0; i < n; i++) {
+      const j = (i + 1) % n;
+      faces.push([lower[i]!, lower[j]!, upper[j]!, upper[i]!]);
+    }
+    let centre: V = [0, 0, 0];
+    for (const p of [...lower, ...upper]) centre = add(centre, p);
+    centre = mul(centre, 1 / (2 * n));
+    for (let f of faces) {
+      // Newell's normal: the area-weighted sum of edge cross products, right for any flat polygon.
+      let nrm: V = [0, 0, 0];
+      for (let i = 0; i < f.length; i++) nrm = add(nrm, cross(f[i]!, f[(i + 1) % f.length]!));
+      let mid: V = [0, 0, 0];
+      for (const p of f) mid = add(mid, p);
+      mid = mul(mid, 1 / f.length);
+      if (dot(nrm, sub(mid, centre)) < 0) f = [...f].reverse();
+      nrm = unit(nrm);
+      if (dot(nrm, sub(mid, centre)) < 0) nrm = mul(nrm, -1);
+      const base0 = this.cellOf.length;
+      for (const p of f) {
+        this.positions.push(...p);
+        this.normals.push(...nrm);
+        this.colours.push(...rgb);
+        this.cellOf.push(cell);
+      }
+      for (let k = 1; k + 1 < f.length; k++) this.indices.push(base0, base0 + k, base0 + k + 1);
     }
   }
 

@@ -10,39 +10,12 @@
  * hash on screen can be compared with the one Node computes for the same steps.
  */
 
-import {
-  AmbientLight,
-  BufferAttribute,
-  BoxGeometry,
-  BufferGeometry,
-  Color,
-  CylinderGeometry,
-  DataTexture,
-  FloatType,
-  DirectionalLight,
-  DynamicDrawUsage,
-  HemisphereLight,
-  InstancedMesh,
-  Matrix4,
-  Mesh,
-  MeshStandardMaterial,
-  MeshStandardNodeMaterial,
-  NearestFilter,
-  PerspectiveCamera,
-  Quaternion,
-  RGBAFormat,
-  Scene,
-  SphereGeometry,
-  Vector3,
-  WebGPURenderer,
-} from 'three/webgpu';
-import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { attribute, cross, Fn, int, ivec2, textureLoad, transformNormalToView, varyingProperty } from 'three/tsl';
+import { BoxGeometry, Mesh, MeshStandardMaterial, SphereGeometry, Vector3 } from 'three/webgpu';
 import { CommandBatch } from '../src/commands.ts';
-import { BEAM_ALIVE, BEAM_BROKEN, BEAM_YIELDED, Core } from '../src/core.ts';
+import { Core } from '../src/core.ts';
 import { locateTruck, STANDARD_TRUCK, STEP_SECONDS, type Truck } from '../src/design.ts';
 import { bridgePanels, DECK_SLAB_TOP, towerPanels, type PanelSet } from '../src/panels3d.ts';
-import { lerpPositions, newPlacement, pickNode, placeBeam, terrainTriangles } from '../src/render3d.ts';
+import { lerpPositions, pickNode } from '../src/render3d.ts';
 import { decodeRecording, encodeRecording, Player, Recorder, type Recording } from '../src/recording.ts';
 import {
   ACTION_START_STEP,
@@ -62,16 +35,12 @@ import {
   type BridgeLayout3,
   type TowerLayout,
 } from '../src/scenes3d.ts';
-import { NODE_TEXTURE_WIDTH, nodeTextureRows, packNodeTexture, skinAttributes } from '../src/skin.ts';
-import { stressRgb, YIELDED_RGB } from '../src/stress-colour.ts';
-import { heightAt, type Terrain } from '../src/terrain.ts';
+import { heightAt } from '../src/terrain.ts';
 import { World, type Snapshot } from '../src/world.ts';
+import { Stage } from './stage3d.ts';
 
 type SceneName = 'tower' | 'bridge';
 
-/** Radius of a drawn beam, metres. */
-const BEAM_DRAW_RADIUS = 0.07;
-/** Most steps taken for one drawn frame; a slow machine slows the simulation down instead of spiralling. */
 const MAX_STEPS_PER_FRAME = 8;
 
 const $ = <T extends HTMLElement>(id: string): T => {
@@ -143,31 +112,14 @@ interface Run {
 // ---- Three.js scene ------------------------------------------------------------------------
 
 // WebGPU where the browser has it, WebGL 2 otherwise; `?webgl=1` forces the fallback for checking it.
-const renderer = new WebGPURenderer({ canvas, antialias: true, forceWebGL: new URLSearchParams(location.search).get('webgl') === '1' });
-const scene = new Scene();
-scene.background = new Color(0x0b0e13);
-const camera = new PerspectiveCamera(45, 1, 0.1, 400);
-const controls = new OrbitControls(camera, canvas);
-controls.enableDamping = true;
-
-scene.add(new AmbientLight(0xffffff, 0.25));
-scene.add(new HemisphereLight(0xcfe0ff, 0x2a2f3a, 1.4));
-const sun = new DirectionalLight(0xffffff, 2.4);
-sun.position.set(18, 30, 12);
-scene.add(sun);
+const stage = new Stage(canvas, new URLSearchParams(location.search).get('webgl') === '1');
+const { scene, camera, controls } = stage;
 
 /** Where the camera starts for each scene: position and look-at target. */
 const VIEWS: Record<SceneName, { from: [number, number, number]; to: [number, number, number] }> = {
   tower: { from: [22, 14, 26], to: [0, 8, 0] },
   bridge: { from: [34, 14, 30], to: [12, -1, 0] },
 };
-
-let terrainMesh: Mesh | null = null;
-let beamMesh: InstancedMesh | null = null;
-let nodeMesh: InstancedMesh | null = null;
-/** The skinned panels, and the texture their vertex function reads node positions from. */
-let panelMesh: Mesh | null = null;
-let nodeTexture: DataTexture | null = null;
 
 /** The bridge's truck: a box on the deck (the heavy one is bigger and red). Drawing only. */
 const truckMesh = new Mesh(new BoxGeometry(1, 1, 1), new MeshStandardMaterial({ color: 0xe8b24a, roughness: 0.6 }));
@@ -187,159 +139,12 @@ let message = '';
 let lastRecording: Recording | null = null;
 let rendererName = '';
 
-function disposeMesh(m: Mesh | null): void {
-  if (!m) return;
-  scene.remove(m);
-  m.geometry.dispose();
-}
-
-/** The ground, from the same triangles the core uses. */
-function showTerrain(t: Terrain): void {
-  disposeMesh(terrainMesh);
-  const { positions, indices } = terrainTriangles(t);
-  const g = new BufferGeometry();
-  g.setAttribute('position', new BufferAttribute(positions, 3));
-  g.setIndex(new BufferAttribute(indices, 1));
-  // Vertex colours: lower ground darker, so a valley reads as a valley.
-  const colours = new Float32Array(t.nx * t.nz * 3);
-  for (let i = 0; i < t.nx * t.nz; i++) {
-    const h = positions[i * 3 + 1]!;
-    const k = Math.max(0, Math.min(1, (h + 5) / 6));
-    colours[i * 3] = 0.16 + 0.2 * k;
-    colours[i * 3 + 1] = 0.2 + 0.22 * k;
-    colours[i * 3 + 2] = 0.17 + 0.14 * k;
-  }
-  g.setAttribute('color', new BufferAttribute(colours, 3));
-  g.computeVertexNormals();
-  terrainMesh = new Mesh(g, new MeshStandardMaterial({ vertexColors: true, flatShading: true, roughness: 1, metalness: 0 }));
-  scene.add(terrainMesh);
-}
-
-/** One instanced cylinder per beam and one sphere per node, sized for this world. */
-function makeInstances(nodes: number, beams: number): void {
-  disposeMesh(beamMesh);
-  disposeMesh(nodeMesh);
-  const cyl = new CylinderGeometry(BEAM_DRAW_RADIUS, BEAM_DRAW_RADIUS, 1, 8, 1);
-  beamMesh = new InstancedMesh(cyl, new MeshStandardMaterial({ roughness: 0.55, metalness: 0.1 }), beams);
-  beamMesh.instanceMatrix.setUsage(DynamicDrawUsage);
-  beamMesh.frustumCulled = false;
-  beamMesh.setColorAt(0, new Color(1, 1, 1)); // makes the colour buffer
-  beamMesh.visible = beamsBox.checked;
-  scene.add(beamMesh);
-  nodeMesh = new InstancedMesh(new SphereGeometry(MEMBER.radius, 12, 8), new MeshStandardMaterial({ color: 0xcfd6e2, roughness: 0.6 }), nodes);
-  nodeMesh.instanceMatrix.setUsage(DynamicDrawUsage);
-  nodeMesh.frustumCulled = false;
-  nodeMesh.visible = nodesBox.checked;
-  scene.add(nodeMesh);
-}
-
 // ---- skinned panels ------------------------------------------------------------------------
 
 /** The panel sets are fixed per scene; built once each. */
 const panelSets: Partial<Record<SceneName, PanelSet>> = {};
 function panelsFor(name: SceneName): PanelSet {
   return (panelSets[name] ??= name === 'tower' ? towerPanels(STANDARD_TOWER) : bridgePanels(STANDARD_BRIDGE3));
-}
-
-/**
- * The TSL vertex function of `src/skin.ts` (`shadeVertexF32` is its CPU copy): read the vertex's
- * four nodes from the node texture, place the vertex at `Σ wᵢ pᵢ`, and turn its normal by the
- * cofactor of the current edges `eᵢ = pᵢ − p₀`: `m₁ (e₂×e₃) + m₂ (e₃×e₁) + m₃ (e₁×e₂)`.
- */
-function skinMaterial(tex: DataTexture): MeshStandardNodeMaterial {
-  const m = new MeshStandardNodeMaterial({ vertexColors: true, roughness: 0.85, metalness: 0 });
-  const W = int(NODE_TEXTURE_WIDTH);
-  const nodeAt = (i: ReturnType<typeof int>) => textureLoad(tex, ivec2(i.mod(W), i.div(W))).xyz;
-  const skinNormal = varyingProperty('vec3', 'skinNormal');
-  m.positionNode = Fn(() => {
-    const idx = attribute('cellNodes', 'vec4');
-    const w = attribute('cellWeights', 'vec4');
-    const r = attribute('restNormal', 'vec3');
-    const p0 = nodeAt(int(idx.x)).toVar();
-    const p1 = nodeAt(int(idx.y)).toVar();
-    const p2 = nodeAt(int(idx.z)).toVar();
-    const p3 = nodeAt(int(idx.w)).toVar();
-    const e1 = p1.sub(p0).toVar();
-    const e2 = p2.sub(p0).toVar();
-    const e3 = p3.sub(p0).toVar();
-    skinNormal.assign(cross(e2, e3).mul(r.x).add(cross(e3, e1).mul(r.y)).add(cross(e1, e2).mul(r.z)));
-    return p0.mul(w.x).add(p1.mul(w.y)).add(p2.mul(w.z)).add(p3.mul(w.w));
-  })();
-  m.normalNode = transformNormalToView(skinNormal).normalize();
-  return m;
-}
-
-/** The scene's panels as one mesh, bound to a node texture sized for `nodeCount` nodes. */
-function makePanels(set: PanelSet, nodeCount: number): void {
-  disposeMesh(panelMesh);
-  nodeTexture?.dispose();
-  const rows = nodeTextureRows(nodeCount);
-  nodeTexture = new DataTexture(new Float32Array(NODE_TEXTURE_WIDTH * rows * 4), NODE_TEXTURE_WIDTH, rows, RGBAFormat, FloatType);
-  nodeTexture.minFilter = NearestFilter;
-  nodeTexture.magFilter = NearestFilter;
-  nodeTexture.generateMipmaps = false;
-  const a = skinAttributes(set.binding);
-  const g = new BufferGeometry();
-  g.setAttribute('position', new BufferAttribute(Float32Array.from(set.positions), 3));
-  g.setAttribute('normal', new BufferAttribute(Float32Array.from(set.normals), 3));
-  g.setAttribute('color', new BufferAttribute(set.colours, 3));
-  g.setAttribute('cellNodes', new BufferAttribute(a.nodes, 4));
-  g.setAttribute('cellWeights', new BufferAttribute(a.weights, 4));
-  g.setAttribute('restNormal', new BufferAttribute(a.restNormal, 3));
-  g.setIndex(new BufferAttribute(set.indices, 1));
-  panelMesh = new Mesh(g, skinMaterial(nodeTexture));
-  panelMesh.frustumCulled = false; // the rest-pose bounds say nothing about where the nodes are
-  panelMesh.visible = panelsBox.checked;
-  scene.add(panelMesh);
-}
-
-/** Uploads the drawn node positions for the panels' vertex function. */
-function drawPanels(positions: Float32Array): void {
-  if (!panelMesh || !nodeTexture || !panelMesh.visible) return;
-  packNodeTexture(positions, nodeTexture.image.data as Float32Array);
-  nodeTexture.needsUpdate = true;
-}
-
-const place = newPlacement();
-const tmpM = new Matrix4();
-const tmpP = new Vector3();
-const tmpQ = new Quaternion();
-const tmpS = new Vector3();
-const tmpC = new Color();
-const HIDDEN = new Matrix4().makeScale(0, 0, 0);
-
-/** Copies a snapshot's beams and flags, with node positions `positions` (blended between steps), into the instance buffers. */
-function drawSnapshot(s: Snapshot, positions: Float32Array): void {
-  if (!beamMesh || !nodeMesh) return;
-  const { beams, nodeFlags } = s;
-  const n = beams.flags.length;
-  for (let i = 0; i < n; i++) {
-    const f = beams.flags[i]!;
-    if (!(f & BEAM_ALIVE) || f & BEAM_BROKEN) {
-      beamMesh.setMatrixAt(i, HIDDEN);
-      continue;
-    }
-    placeBeam(positions, beams.ends[i * 2]!, beams.ends[i * 2 + 1]!, place);
-    tmpP.set(place.x, place.y, place.z);
-    tmpQ.set(place.qx, place.qy, place.qz, place.qw);
-    tmpS.set(1, place.length, 1);
-    beamMesh.setMatrixAt(i, tmpM.compose(tmpP, tmpQ, tmpS));
-    const [r, g, b] = f & BEAM_YIELDED ? YIELDED_RGB : stressRgb(beams.ratio[i]!);
-    beamMesh.setColorAt(i, tmpC.setRGB(r / 255, g / 255, b / 255));
-  }
-  beamMesh.instanceMatrix.needsUpdate = true;
-  if (beamMesh.instanceColor) beamMesh.instanceColor.needsUpdate = true;
-  if (nodeMesh.visible) {
-    for (let i = 0; i < nodeFlags.length; i++) {
-      if (!(nodeFlags[i]! & 1)) {
-        nodeMesh.setMatrixAt(i, HIDDEN);
-        continue;
-      }
-      tmpM.makeTranslation(positions[i * 3]!, positions[i * 3 + 1]!, positions[i * 3 + 2]!);
-      nodeMesh.setMatrixAt(i, tmpM);
-    }
-    nodeMesh.instanceMatrix.needsUpdate = true;
-  }
 }
 
 /** Draws the run's current picture: the two last render buffers blended, the truck, the aim marker. */
@@ -349,8 +154,8 @@ function drawRun(r: Run): void {
     lerpPositions(r.prev, r.snap.positions, r.alpha, r.drawn);
     positions = r.drawn;
   }
-  drawSnapshot(r.snap, positions);
-  drawPanels(positions);
+  stage.drawSnapshot(r.snap, positions);
+  stage.drawPanels(positions);
   drawTruck(r, positions);
 }
 
@@ -402,16 +207,6 @@ function resetView(): void {
   controls.update();
 }
 
-function resize(): void {
-  const r = canvas.getBoundingClientRect();
-  const w = Math.max(1, Math.round(r.width));
-  const h = Math.max(1, Math.round(r.height));
-  renderer.setPixelRatio(window.devicePixelRatio || 1);
-  renderer.setSize(w, h, false);
-  camera.aspect = w / h;
-  camera.updateProjectionMatrix();
-}
-
 // ---- running -------------------------------------------------------------------------------
 
 function startRun(name: SceneName, until = -1, action: ActionKind | null = null): void {
@@ -427,9 +222,9 @@ function startRun(name: SceneName, until = -1, action: ActionKind | null = null)
     world.free();
     return;
   }
-  showTerrain(layout.terrain);
-  makeInstances(layout.nodeCount, layout.beamCount);
-  makePanels(panelsFor(name), layout.nodeCount);
+  stage.showTerrain(layout.terrain);
+  stage.makeInstances(layout.nodeCount, layout.beamCount, MEMBER.radius);
+  stage.makePanels(panelsFor(name), layout.nodeCount);
   const snap = world.snapshot();
   run = {
     world,
@@ -483,9 +278,9 @@ function startReplay(rec: Recording, label: string, until = -1): void {
   }
   const { scene: name, layout } = found;
   sceneSel.value = name;
-  showTerrain(layout.terrain);
-  makeInstances(layout.nodeCount, layout.beamCount);
-  makePanels(panelsFor(name), layout.nodeCount);
+  stage.showTerrain(layout.terrain);
+  stage.makeInstances(layout.nodeCount, layout.beamCount, MEMBER.radius);
+  stage.makePanels(panelsFor(name), layout.nodeCount);
   const snap = world.snapshot();
   run = {
     world,
@@ -779,7 +574,7 @@ function frame(now: number): void {
   }
   if (run) drawRun(run);
   controls.update();
-  void renderer.render(scene, camera);
+  stage.render();
   updateText();
   requestAnimationFrame(frame);
 }
@@ -791,8 +586,7 @@ async function main(): Promise<void> {
   if (!res.ok) throw new Error(`could not load beam_core.wasm (${res.status})`);
   core = await Core.load(await res.arrayBuffer());
 
-  await renderer.init();
-  rendererName = (renderer.backend as { isWebGPUBackend?: boolean }).isWebGPUBackend ? 'WebGPU' : 'WebGL 2';
+  rendererName = await stage.init();
 
   const params = new URLSearchParams(location.search);
   const wanted = params.get('scene');
@@ -807,6 +601,9 @@ async function main(): Promise<void> {
   // `?beams=0` and `?panels=0` hide either, for a close look at the other.
   if (params.get('beams') === '0') beamsBox.checked = false;
   if (params.get('panels') === '0') panelsBox.checked = false;
+  stage.showBeams = beamsBox.checked;
+  stage.showNodes = nodesBox.checked;
+  stage.showPanels = panelsBox.checked;
   const speed = params.get('speed');
   if (speed !== null && [...speedSel.options].some((o) => o.value === speed)) speedSel.value = speed;
 
@@ -829,22 +626,19 @@ async function main(): Promise<void> {
     loadInput.value = '';
     if (file) void file.arrayBuffer().then((b) => openRecording(new Uint8Array(b), file.name));
   });
-  nodesBox.addEventListener('change', () => {
-    if (nodeMesh) nodeMesh.visible = nodesBox.checked;
-    if (run) drawRun(run);
-  });
-  for (const [box, mesh] of [
-    [beamsBox, () => beamMesh],
-    [panelsBox, () => panelMesh],
+  for (const [box, layer] of [
+    [beamsBox, 'showBeams'],
+    [nodesBox, 'showNodes'],
+    [panelsBox, 'showPanels'],
   ] as const) {
     box.addEventListener('change', () => {
-      const m = mesh();
-      if (m) m.visible = box.checked;
+      stage[layer] = box.checked;
+      stage.applyLayers();
       if (run) drawRun(run);
     });
   }
   resetViewBtn.addEventListener('click', resetView);
-  window.addEventListener('resize', resize);
+  window.addEventListener('resize', () => stage.resize());
   canvas.addEventListener('pointerdown', onPointerDown);
   canvas.addEventListener('pointerup', onPointerUp);
   canvas.addEventListener('pointermove', onPointerMove);
@@ -858,7 +652,7 @@ async function main(): Promise<void> {
     else if (e.key === 'Escape') setAiming(false);
   });
 
-  resize();
+  stage.resize();
   if (params.get('replay') === 'sample') await replaySample(until);
   else startRun(sceneSel.value as SceneName, until, action);
   requestAnimationFrame(frame);
