@@ -225,7 +225,10 @@ function cutRover(batch: CommandBatch, split: boolean) {
   return r;
 }
 
-/** The rover's script: settle, a 4 kN push up on the front +z wheel's hub (a rock), drive, stop. */
+/**
+ * The rover's script: settle, a 4 kN push up on the front +z wheel's hub (meant as a rock; it launches the
+ * rover through ground contact with the rigid wheels, a finding for 5.3/5.6 in ER 005 phase 5.7), drive, stop.
+ */
 const ROCK_FROM = 120;
 const ROCK_TO = 300;
 const DRIVE_FROM = 300;
