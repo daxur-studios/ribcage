@@ -10,7 +10,7 @@
 import { COMMAND_BYTES, type CommandBatch } from './commands.ts';
 
 /** The ABI version this loader was written for (`ABI_VERSION` in core/src/ffi.rs). */
-export const ABI_VERSION = 5;
+export const ABI_VERSION = 6;
 
 /** A host pointer inside the core (an integer to JavaScript). */
 export type HostPtr = number;
@@ -64,6 +64,15 @@ interface Exports {
   rc_seam_area_ptr(h: number): number;
   rc_seam_bending_ptr(h: number): number;
   rc_segment_props(h: number, segment: number): number;
+  rc_body_slot_count(h: number): number;
+  rc_body_flags_ptr(h: number): number;
+  rc_body_centre_ptr(h: number): number;
+  rc_body_rot_ptr(h: number): number;
+  rc_body_vel_ptr(h: number): number;
+  rc_body_omega_ptr(h: number): number;
+  rc_body_mass_ptr(h: number): number;
+  rc_node_body_ptr(h: number): number;
+  rc_segment_body_ptr(h: number): number;
 }
 
 /** Segments, seams and each node's segment, as copies (plan 005, phase 5.1). */
@@ -82,6 +91,22 @@ export interface SegmentView {
   seamB: Uint32Array;
   seamArea: Float64Array;
   seamBending: Float64Array;
+}
+
+/** Rigid bodies, as copies (plan 005, phase 5.2). A slot is numbered as its body's lowest segment. */
+export interface BodyView {
+  /** Flags per slot (`BODY_ALIVE`); empty until the first body is made. */
+  flags: Uint32Array;
+  /** Per slot, three numbers each: centre of mass, linear velocity, angular velocity (world frame). */
+  centre: Float64Array;
+  vel: Float64Array;
+  omega: Float64Array;
+  /** Per slot, four numbers `w x y z`: the rotation from the body frame to the world. */
+  rot: Float64Array;
+  mass: Float64Array;
+  /** Body per node slot and per segment (`NO_BODY` for none). */
+  nodeBody: Uint32Array;
+  segmentBody: Uint32Array;
 }
 
 /** A segment's mass, centre and inertia from the current positions (`segment::SegmentProps`). */
@@ -302,6 +327,23 @@ export class Core {
       seamB: new Uint32Array(mem, x.rc_seam_b_ptr(h), seams).slice(),
       seamArea: new Float64Array(mem, x.rc_seam_area_ptr(h), seams).slice(),
       seamBending: new Float64Array(mem, x.rc_seam_bending_ptr(h), seams).slice(),
+    };
+  }
+
+  /** Rigid bodies and the node and segment tables, as copies. */
+  bodies(h: HostPtr): BodyView {
+    const x = this.#x;
+    const slots = x.rc_body_slot_count(h);
+    const mem = x.memory.buffer;
+    return {
+      flags: new Uint32Array(mem, x.rc_body_flags_ptr(h), slots).slice(),
+      centre: new Float64Array(mem, x.rc_body_centre_ptr(h), slots * 3).slice(),
+      vel: new Float64Array(mem, x.rc_body_vel_ptr(h), slots * 3).slice(),
+      omega: new Float64Array(mem, x.rc_body_omega_ptr(h), slots * 3).slice(),
+      rot: new Float64Array(mem, x.rc_body_rot_ptr(h), slots * 4).slice(),
+      mass: new Float64Array(mem, x.rc_body_mass_ptr(h), slots).slice(),
+      nodeBody: new Uint32Array(mem, x.rc_node_body_ptr(h), x.rc_node_count(h)).slice(),
+      segmentBody: new Uint32Array(mem, x.rc_segment_body_ptr(h), x.rc_segment_count(h)).slice(),
     };
   }
 

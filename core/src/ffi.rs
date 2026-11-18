@@ -20,6 +20,7 @@
 use crate::bench::{apply_gust, bench_scene, BenchSpec};
 use crate::command::{apply_commands, Command, COMMAND_BYTES};
 use crate::event::Event;
+use crate::maths::Quat;
 use crate::real::{Real, Vec3};
 use crate::sim::{physics_hash, state_hash, step};
 use crate::world::{BeamSpec, World};
@@ -28,9 +29,11 @@ use crate::world::{BeamSpec, World};
 /// command kinds. 3 added the terrain commands (kinds 7 and 8); 4 added the thruster commands
 /// (kinds 9 and 10) and puts thrusters in the state hash (only when there are any). 5 added the
 /// segment commands (kinds 11 and 12), the segment readers and `rc_physics_hash`, and puts segments
-/// in the state hash (only once a segment exists). Nothing else changed, so a recording made at
-/// ABI 2, 3 or 4 still means the same thing and replays (`src/recording.ts`).
-pub const ABI_VERSION: u32 = 5;
+/// in the state hash (only once a segment exists). 6 added the rigid-body commands (kinds 13 and
+/// 14) and the body readers, and puts bodies in both hashes (only while a body is alive). Nothing
+/// else changed, so a recording made at ABI 2, 3, 4 or 5 still means the same thing and replays
+/// (`src/recording.ts`).
+pub const ABI_VERSION: u32 = 6;
 
 /// Bytes per command record, for the host to check against its own layout.
 #[no_mangle]
@@ -441,6 +444,87 @@ pub unsafe extern "C" fn rc_seam_area_ptr(h: *const Host) -> *const Real {
 #[no_mangle]
 pub unsafe extern "C" fn rc_seam_bending_ptr(h: *const Host) -> *const Real {
     (*h).world.seam_bending.as_ptr()
+}
+
+/// Body slots, live or not (plan 005, phase 5.2): the segment count once a body was made, else zero. A slot is numbered as its body's lowest segment.
+///
+/// # Safety
+/// `h` is a live host pointer.
+#[no_mangle]
+pub unsafe extern "C" fn rc_body_slot_count(h: *const Host) -> u32 {
+    (*h).world.body_slot_count()
+}
+
+/// Each body slot's flags, one `u32` (`body::BODY_ALIVE`).
+///
+/// # Safety
+/// `h` is a live host pointer.
+#[no_mangle]
+pub unsafe extern "C" fn rc_body_flags_ptr(h: *const Host) -> *const u32 {
+    (*h).world.body_flags.as_ptr()
+}
+
+/// Each body slot's centre of mass, world frame.
+///
+/// # Safety
+/// `h` is a live host pointer.
+#[no_mangle]
+pub unsafe extern "C" fn rc_body_centre_ptr(h: *const Host) -> *const Vec3 {
+    (*h).world.body_centre.as_ptr()
+}
+
+/// Each body slot's rotation, four `Real` `w x y z` (body frame to world).
+///
+/// # Safety
+/// `h` is a live host pointer.
+#[no_mangle]
+pub unsafe extern "C" fn rc_body_rot_ptr(h: *const Host) -> *const Quat {
+    (*h).world.body_rot.as_ptr()
+}
+
+/// Each body slot's linear velocity.
+///
+/// # Safety
+/// `h` is a live host pointer.
+#[no_mangle]
+pub unsafe extern "C" fn rc_body_vel_ptr(h: *const Host) -> *const Vec3 {
+    (*h).world.body_vel.as_ptr()
+}
+
+/// Each body slot's angular velocity, world frame.
+///
+/// # Safety
+/// `h` is a live host pointer.
+#[no_mangle]
+pub unsafe extern "C" fn rc_body_omega_ptr(h: *const Host) -> *const Vec3 {
+    (*h).world.body_omega.as_ptr()
+}
+
+/// Each body slot's mass, one `Real`.
+///
+/// # Safety
+/// `h` is a live host pointer.
+#[no_mangle]
+pub unsafe extern "C" fn rc_body_mass_ptr(h: *const Host) -> *const Real {
+    (*h).world.body_mass.as_ptr()
+}
+
+/// Each node slot's body, one `u32` (`u32::MAX` for a loose node).
+///
+/// # Safety
+/// `h` is a live host pointer.
+#[no_mangle]
+pub unsafe extern "C" fn rc_node_body_ptr(h: *const Host) -> *const u32 {
+    (*h).world.node_body.as_ptr()
+}
+
+/// Each segment's body, one `u32` (`u32::MAX` when not rigid).
+///
+/// # Safety
+/// `h` is a live host pointer.
+#[no_mangle]
+pub unsafe extern "C" fn rc_segment_body_ptr(h: *const Host) -> *const u32 {
+    (*h).world.seg_body.as_ptr()
 }
 
 /// Computes one segment's mass, centre and inertia from the current positions and returns ten

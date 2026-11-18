@@ -71,3 +71,59 @@ Built by Sonnet. `cargo test`, `pnpm test` (224 pass, 1 skipped) and `pnpm typec
 ### For 5.2
 
 5.2 (Opus) can start from the files alone: `core/src/segment.rs` (the arrays and `segment_centre_and_inertia`) and the hop test in `test/segment.test.ts` (the "no physics change" pattern). Keep the segment section last in the hash among today's sections, with bodies appended after it only while a body exists.
+
+## 2026-11-18 (phase 5.2: rigid bodies and the switch formulas)
+
+Built by Opus. `cargo test`, `pnpm test` (225 pass, 1 skipped: the existing reported-benchmark skip) and `pnpm typecheck` pass. The three goldens replay to their hashes, and the live hop still ends at `0xd92f2aad01c0e048` at step 1320. A world with no body hashes exactly as before.
+
+### Record layouts (ABI 6)
+
+- **[decision]** **`CMD_MAKE_RIGID` (13).** `a` = segment, `b` = a second segment to merge into the same body, or `u32::MAX`. Result: the body's slot, or rejected (nothing changed) when a segment does not exist, has no massive node, or the group is degenerate. If either segment already rides a body, that whole body joins the new one.
+- **[decision]** **`CMD_RELEASE_RIGID` (14).** `a` = segment; result 1. Rejected when the segment does not exist or is not rigid. The brief allowed it "if the tests need one": they do, so the native-against-wasm hash comparison runs a release through the boundary.
+- **[decision]** **Arrays on the world, one per field.** Per node: `node_body` (`NO_BODY` = `u32::MAX`), `node_offset` (body frame). Per segment: `seg_body`. Per body slot: `body_flags` (`BODY_ALIVE` = 1), `body_centre`, `body_rot` (quaternion w, x, y, z), `body_vel`, `body_omega` (world frame), `body_mass`, `body_inertia` and `body_inv_inertia` (body frame, symmetric, six numbers), `body_prev_centre`, `body_prev_rot`. The slot is the lowest segment of the group, so the slot arrays grow lazily to the segment count and no free list is needed. Member segments are not stored as a list: `seg_body` is the membership, walked in segment order.
+- **[decision]** **Readers.** `rc_body_slot_count`, `rc_body_flags_ptr`, `rc_body_centre_ptr`, `rc_body_rot_ptr`, `rc_body_vel_ptr`, `rc_body_omega_ptr`, `rc_body_mass_ptr`, `rc_node_body_ptr`, `rc_segment_body_ptr`; in TypeScript `World.bodies()`, and `makeRigid` / `releaseRigid` on `CommandBatch`. `ABI_VERSION` 6 in `core/src/ffi.rs` and `src/core.ts`; the decoder reads ABI 2 to 6.
+- **[decision]** **Hash.** While at least one body is alive, `physics_hash` gets a body section after everything else: the live count, then per live slot in ascending order the slot, centre, rotation, velocity, angular velocity, mass and the six inverse-inertia numbers. `state_hash` also adds, after the segment section, `seg_body` for every segment and `node_body` plus `node_offset` for every node. Bodies are physics, so they go in `physics_hash` too; a world with no live body adds nothing to either.
+- **[decision]** **Own maths in `core/src/maths.rs`.** `Quat` (product, conjugate, normalise, rotate, inverse rotate, Cayley map, to matrix), `Sym3` (point inertia, determinant, inverse, rotated) and `Mat3` (product, skew, solve by cofactors). Only add, subtract, multiply, divide and `sqrt`; no `mul_add`, no library maths. `Vec3` gained `cross` and negation.
+
+### Formulas as built
+
+- **[decision]** **Make rigid.** Sum over the loose massive nodes of the segments, in node order, and over any body already holding one of them: mass `M`, centre `c = Σ m x / M`, momentum `P = Σ m v`, angular momentum about `c`: `L = Σ m (x − c) × v + Σ_bodies (R I Rᵀ ω + M_b (c_b − c) × V_b)`, inertia about `c` with the parallel-axis term for bodies. Then `V = P / M`, `ω = I⁻¹ L`, rotation reset to identity (offsets are world-frame `x − c`), and each rider's velocity set to `V + ω × r`. Kinetic energy can only fall (the internal relative motion is removed); positions are not touched.
+- **[decision]** **Release.** Released nodes take `V + ω × r` at their current world position. A body that keeps some segments is re-summed from its riders (`refresh_body`): mass and centre `c'` from the remaining riders, `V' = V + ω × (c' − c)`, `ω` unchanged, inertia rebuilt. If the remaining group is degenerate it is released whole. If the lowest segment left, the body moves to the new lowest slot.
+- **[decision]** **Degeneracy.** A group is refused (or released) when it has no mass or `det(I) ≤ 1e-9 (trace / 3)³`, which catches single nodes and straight rods, whose inverse inertia would blow up.
+- **[decision]** **Step.** Each body is its own island in 5.2 and takes the same substep count as a light island: `MIN_SUBSTEPS` (or `n` under `Fixed(n)`), `h = STEP_SECONDS / n`. `step_bodies` runs after the islands are copied back and before forces are cleared. Force and torque are summed over the riders once at step start, in node order. Per substep: predict `V += h (g + F / M)`, `c += h V`, angular kick `Π += h Rᵀ τ` on body-frame momentum, spin term, then the predicted pose goes into `body_prev_*`. Derive is in delta form (`V += (c − c_pred) / h`, `ω += 2 δq_vec / h`), which is exactly zero in 5.2 because nothing corrects a body yet; then `V` is clamped to the world's max speed. Riders' world positions and velocities are written once, after the last substep.
+- **[decision]** **Spin term: implicit midpoint by default** (`SpinForm::Midpoint`; `Explicit` and `Implicit` kept behind `World.spin_form` for the measurement). Solve `Π' = cay(−h ω_m) Π` with `ω_m = I⁻¹ (Π + Π') / 2` by three Newton iterations from `Π`, and turn the body by `cay(h ω_m)`. The Cayley map is a rotation, so `|Π|` and world `L` hold to rounding; energy holds to the Newton residual. Cost: one 3×3 solve per iteration.
+- **[assumption]** **Angular-speed clamp 100 rad/s** (`DEFAULT_MAX_ANGULAR_SPEED`): if `|ω| > 100`, `ω` is scaled down, which can only remove energy. Picked as well above anything a player can spin a part to by thrust, and below the rate where `h ω` leaves the Cayley map's comfortable range (`h ω ≈ 0.42` at 4 substeps).
+- **[decision]** **Islands see riders as fixed.** A riding node is not movable, so it does not seed or join a live island; a beam from a live node to a rider packs the rider with inverse mass 0 (a pinned end that moves with the body); a beam with both ends riding is skipped. No beam pushes a body yet (5.3), and bodies have no ground contact in 5.2.
+- **[decision]** **Bad-number guard.** If a body's state is not finite after a substep, it goes back to its step-start centre and rotation with zero velocity and spin, its riders are flagged frozen, and `EVENT_FREEZE` is emitted (index = first rider, value = substep). Same contract as the islands' guard.
+- **[decision]** **Riders come and go.** Assigning a node to a rigid segment calls `make_rigid` on it; deleting a rider or changing its inverse mass re-sums its body (`refresh_body`), releasing it whole if it becomes degenerate.
+
+### Measured
+
+- **[finding]** **Free fall.** The drop after `k` substeps equals `g h² k (k + 1) / 2` (symplectic Euler) to 1e-12 and stays within `½ g h t` of `½ g t²`; spin and spin energy are unchanged to 1e-12. The same box as loose nodes falls to within 1e-9 relative of the body: the loose nodes derive velocity from positions, the body integrates it, and the two round differently by about 1e-10.
+- **[finding]** **Ten simulated minutes of spin (36,000 steps).** A 1.2 × 0.7 × 0.3 m cuboid about each principal axis and about a tilted axis: angular momentum and energy within 1e-9 relative (the bound the test asserts; seen about 3.5e-11 and 6.8e-11).
+- **[finding]** **Intermediate-axis tumble** at 1, 20 and 50 rad/s: the axis flips (the test checks it does), energy stays within 1e-9 and never rises. At 97 rad/s the tumble passes the 100 rad/s clamp, which removes 19% of the energy over ten minutes and 10% of `|L|`; energy never rises (largest gain 1e-15). The test asserts only "no gain" for that clamped case.
+- **[finding]** **The open question, answered with numbers** (the same cuboid, ten minutes, energy change):
+
+  | start spin, rad/s | explicit + clamp | implicit (backward Euler) | implicit midpoint |
+  |---|---|---|---|
+  | 1.1 | +41% (`|L|` +19%) | −26% (`|L|` −14%) | 6.8e-11 |
+  | 20 | +2161% (until clamped) | −94% | 6.8e-11 |
+  | 51 | +261% (clamped) | −94% | 6.8e-11 |
+  | 97 | +1% (clamped; `|L|` +112%) | −94% | −19% (clamp only) |
+
+  The explicit term pumps energy until the clamp holds it at the ceiling: the clamp hides the gain, it does not stop it. Plain implicit is stable but bleeds spin away, which reads as debris that stops tumbling. The midpoint form is the only one that holds both, so it is the default and the explicit form is not used.
+- **[finding]** **Cost.** 144,000 substeps of one body, release build: 42 / 43 / 56 ms (explicit / implicit / midpoint) at 1 rad/s, 29 / 32 / 48 ms at higher rates. Midpoint is 1.3× to 1.65× the explicit term, about 0.33 µs per body substep with the world step around it: small against a lattice island.
+- **[finding]** **Switch formulas.** Making a moving, spinning, bent lattice rigid keeps linear momentum to 1e-13 and angular momentum to 1e-12 relative, never raises kinetic energy, and moves no node (bit-identical positions). Merging two bodies in two steps keeps the same. Releasing keeps momentum, spin and kinetic energy to the same bounds and moves no node; make then release in the same step is the identity on momentum. Rods and single nodes are refused; riders leaving and joining re-sum the body.
+- **[finding]** **Hashes.** A body run hashes the same twice. The native-against-wasm test now runs a scene with segments and bodies through the boundary (a box and a tetrahedron, a beam to the box, a thruster; make rigid at step 10, merge at 40, release one segment at 80, the rest at 100): physics hash `0x9959877922115153` after step 61 (a body alive) and `0xf58545641d0a5073` after 120, equal in Rust and through WebAssembly.
+
+### Not checked
+
+- **[assumption]** The bad-number guard path is written but no test drives a body to a non-finite state.
+- **[assumption]** `Fixed(n)` substeps with a body are not tested; only the rule path is.
+- **[assumption]** No body contacts, no beam pushing a body, no sleep or wake triggers: all later phases.
+- **[assumption]** No measurement with many bodies or a body with many riders; the write-back is one pass over riders per step and was not timed at scale.
+- **[assumption]** Not run in the browser: the page draws no body yet.
+
+### For 5.3
+
+5.3 (Opus) can start from the files alone. `predict_body` and `derive_body` in `core/src/body.rs` are already split per substep in delta form, so moving them into the island substep loop (a body joining the island of the live nodes it touches) is a move, not a rewrite; `body_prev_*` holds the predicted pose for the riding-endpoint correction. Beams to riders are packed today as fixed ends (`inv_mass` 0) in `core/src/island.rs`; `Endpoint::Riding` replaces that.

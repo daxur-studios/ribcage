@@ -83,6 +83,7 @@ impl World {
         self.seg_parent.push(parent);
         self.seg_seam.push(seam);
         self.seg_mass.push(0.0);
+        self.seg_body.push(crate::body::NO_BODY);
         Some(index)
     }
 
@@ -99,6 +100,10 @@ impl World {
         }
         self.node_segment[n] = segment;
         self.seg_mass[s] += 1.0 / self.inv_mass[n];
+        // A node put into a rigid segment joins its body, as a loose node joins at make time.
+        if self.seg_body[s] != crate::body::NO_BODY {
+            self.make_rigid(&[segment]);
+        }
         true
     }
 

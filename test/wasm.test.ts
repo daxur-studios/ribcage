@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
-import { CommandBatch, REJECTED } from "../src/commands.ts";
+import { CommandBatch, NO_SEGMENT, REJECTED } from "../src/commands.ts";
 import { Core, EVENT_BREAK } from "../src/core.ts";
 
 // Same numbers as core/tests/ffi.rs, recorded from the native build. If the solver changes on
@@ -14,6 +14,9 @@ const TERRAIN_ONLY = 0x424288d9b2e8abb4n;
 const TERRAIN_SCENE_120 = 0x2bdef035f12d0c86n;
 /** A three-node craft with two thrusters and mid-run throttle changes, after 120 steps (`THRUST_SCENE_120` in core/tests/ffi.rs). */
 const THRUST_SCENE_120 = 0x765d0f4475514944n;
+/** A box and a tetrahedron as two segments, made rigid, merged and released (`BODY_SCENE_61` and `BODY_SCENE_120` in core/tests/ffi.rs). */
+const BODY_SCENE_61 = 0x9959877922115153n;
+const BODY_SCENE_120 = 0xf58545641d0a5073n;
 /** End hash of the reported scene after 720 steps at the default rule (`cargo run --release -p beam-core --example bench`). */
 const STANDARD_BENCH_720 = 0x871092299f3cea56n;
 
@@ -130,6 +133,51 @@ test("a thrusting craft gives the native hash", async () => {
   }
   assert.equal(core.stateHash(h), THRUST_SCENE_120);
   assert.ok(core.positions(h)[0]! > 0.5, "the craft flew along +x");
+  core.hostFree(h);
+});
+
+test("segments and a rigid body give the native hashes", async () => {
+  const core = await Core.load(loadBytes());
+  const h = core.hostNew();
+  const setup = new CommandBatch();
+  const spec = (rest: number) => ({ rest, compliance: 1e-5, damping: 20, yieldStrain: 5, breakStrain: 10 });
+  for (let k = 0; k < 8; k++) {
+    setup.addNode(k & 1 ? 0.5 : -0.5, k & 2 ? 50.5 : 49.5, k & 4 ? 0.5 : -0.5, 0.1, 0.1);
+  }
+  for (const [x, y, z] of [[2, 50, 0], [3, 50, 0], [2.5, 50, 0.8660254037844386], [2.5, 50.816496580927726, 0.28867513459481287]] as const) {
+    setup.addNode(x, y, z, 0.2, 0.1);
+  }
+  for (let i = 0; i < 8; i++) {
+    for (const bit of [1, 2, 4]) if ((i & bit) === 0) setup.addBeam(i, i | bit, spec(1));
+  }
+  for (const [a, b] of [[8, 9], [8, 10], [8, 11], [9, 10], [9, 11], [10, 11]] as const) setup.addBeam(a, b, spec(1));
+  setup.addBeam(1, 8, spec(1.5));
+  setup.addSegment(NO_SEGMENT, 0, 0, 0);
+  setup.addSegment(0, 0, 0.01, 1e-5);
+  for (let n = 0; n < 12; n++) setup.setNodeSegment(n, n < 8 ? 0 : 1);
+  setup.addThruster(0, 1, 300);
+  setup.setThrottle(0, 1);
+  assert.equal(core.applyCommands(h, setup).rejected, 0);
+  for (let s = 0; s < 120; s++) {
+    const more = new CommandBatch();
+    if (s === 10) more.makeRigid(0);
+    if (s === 40) more.makeRigid(1, 0);
+    if (s === 80) more.releaseRigid(1);
+    if (s === 100) more.releaseRigid(0);
+    if (more.count > 0) {
+      const r = core.applyCommands(h, more);
+      assert.equal(r.rejected, 0, `step ${s}`);
+    }
+    core.step(h);
+    if (s === 60) {
+      const bodies = core.bodies(h);
+      assert.equal(bodies.flags[0], 1, "one body, in slot 0");
+      assert.ok([...bodies.nodeBody].every((b) => b === 0), "every node rides it");
+      assert.equal(core.stateHash(h), BODY_SCENE_61);
+    }
+  }
+  assert.equal(core.stateHash(h), BODY_SCENE_120);
+  assert.equal(core.bodies(h).flags[0], 0, "released");
   core.hostFree(h);
 });
 

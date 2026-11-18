@@ -1,6 +1,7 @@
 //! The fixed 60 Hz step and the state hash. The solve itself is in [`crate::solver`].
 //! Islands and nodes visited in ascending index order (determinism list).
 
+use crate::body::NO_BODY;
 use crate::contact::find_contacts;
 use crate::event::Event;
 use crate::island::{build_islands, copy_back};
@@ -93,6 +94,14 @@ fn step_inner(world: &mut World, choice: Choice) -> StepStats {
     for isl in islands.iter().filter(|isl| !isl.skipped) {
         copy_back(world, isl);
     }
+    // Rigid bodies (plan 005), each on its own in phase 5.2, then their riders written back.
+    world.step_bodies(
+        match choice {
+            Choice::Rule(_) => None,
+            Choice::Fixed(n) => Some(n),
+        },
+        done,
+    );
     for f in world.force.iter_mut() {
         *f = Vec3::ZERO;
     }
@@ -149,8 +158,10 @@ fn mix_vec(h: &mut u64, v: Vec3) {
 /// order, plus the step count. Dead slots are included so slot reuse is part of the state.
 /// The terrain (size, origin, cell, friction and every height) follows, if there is one, then
 /// the thrusters (ends, maximum and throttle), if there are any, and last the segments and seams
-/// (plan 005), if any segment exists. A world that never ran a segment command hashes exactly as
-/// it did before segments existed; [`physics_hash`] is the hash without the segment section.
+/// (plan 005), if any segment exists, and the body membership while a rigid body is alive. A
+/// world that never ran a segment command hashes exactly as it did before segments existed;
+/// [`physics_hash`] is the hash without the segment section. The bodies' own state (centre,
+/// rotation, velocities, mass, inverse inertia) is in both, only while a body is alive.
 pub fn state_hash(world: &World) -> u64 {
     let mut h = physics_hash_state(world);
     // Segments, only once one exists. They change no physics in phase 5.1, so this section is the
@@ -173,6 +184,19 @@ pub fn state_hash(world: &World) -> u64 {
         }
         for i in 0..world.node_segment.len() {
             mix(&mut h, world.node_segment[i] as u64);
+        }
+    }
+    // Rigid bodies, only while one is alive: which segment and node belong to which body and each
+    // rider's offset (the body state itself is in `physics_hash_state`).
+    if world.body_count() > 0 {
+        for s in 0..world.seg_body.len() {
+            mix(&mut h, world.seg_body[s] as u64);
+        }
+        for i in 0..world.node_body.len() {
+            mix(&mut h, world.node_body[i] as u64);
+            if world.node_body[i] != NO_BODY {
+                mix_vec(&mut h, world.node_offset[i]);
+            }
         }
     }
     h
@@ -224,6 +248,31 @@ fn physics_hash_state(world: &World) -> u64 {
             mix(&mut h, world.thr_head[t] as u64);
             mix_real(&mut h, world.thr_max[t]);
             mix_real(&mut h, world.thr_throttle[t]);
+        }
+    }
+    // Rigid bodies (plan 005), only while one is alive, in slot order: a world that never made
+    // one, or released every one, hashes as before. Bodies move, so they are physics.
+    let bodies = world.body_count();
+    if bodies > 0 {
+        mix(&mut h, bodies as u64);
+        for b in 0..world.body_slot_count() {
+            if !world.body_alive(b) {
+                continue;
+            }
+            let u = b as usize;
+            mix(&mut h, b as u64);
+            mix_vec(&mut h, world.body_centre[u]);
+            let q = world.body_rot[u];
+            for r in [q.w, q.x, q.y, q.z] {
+                mix_real(&mut h, r);
+            }
+            mix_vec(&mut h, world.body_vel[u]);
+            mix_vec(&mut h, world.body_omega[u]);
+            mix_real(&mut h, world.body_mass[u]);
+            let k = world.body_inv_inertia[u];
+            for r in [k.xx, k.yy, k.zz, k.xy, k.xz, k.yz] {
+                mix_real(&mut h, r);
+            }
         }
     }
     h

@@ -2,7 +2,9 @@
 //! and one door for external forces (rule 7). The solver never reads these directly;
 //! it works on a packed [`crate::island::Island`] (rule 5).
 
+use crate::body::{SpinForm, DEFAULT_MAX_ANGULAR_SPEED, NO_BODY};
 use crate::event::Event;
+use crate::maths::{Quat, Sym3};
 use crate::real::{Real, Vec3};
 use crate::terrain::Terrain;
 use std::cmp::Reverse;
@@ -105,6 +107,27 @@ pub struct World {
     pub seam_b: Vec<u32>,
     pub seam_area: Vec<Real>,
     pub seam_bending: Vec<Real>,
+    // Rigid bodies (plan 005, phase 5.2; see [`crate::body`]). Per node: the body it rides
+    // (`NO_BODY` for none) and its offset from the body's centre in the body frame. Per segment:
+    // its body. Per body slot (slot = the lowest segment of the body, so the arrays are sized by
+    // segments and grow when the first body is made): the rest, one array per field.
+    pub node_body: Vec<u32>,
+    pub node_offset: Vec<Vec3>,
+    pub seg_body: Vec<u32>,
+    pub body_flags: Vec<u32>,
+    pub body_centre: Vec<Vec3>,
+    pub body_rot: Vec<Quat>,
+    pub body_vel: Vec<Vec3>,
+    pub body_omega: Vec<Vec3>,
+    pub body_mass: Vec<Real>,
+    pub body_inertia: Vec<Sym3>,
+    pub body_inv_inertia: Vec<Sym3>,
+    pub body_prev_centre: Vec<Vec3>,
+    pub body_prev_rot: Vec<Quat>,
+    /// Largest angular speed a body keeps, rad/s (the spin clamp, [`crate::body`]).
+    pub max_angular_speed: Real,
+    /// How a body's gyroscopic (spin) term is integrated; [`SpinForm::Midpoint`] by default.
+    pub spin_form: SpinForm,
 }
 
 impl Default for World {
@@ -150,6 +173,21 @@ impl Default for World {
             seam_b: Vec::new(),
             seam_area: Vec::new(),
             seam_bending: Vec::new(),
+            node_body: Vec::new(),
+            node_offset: Vec::new(),
+            seg_body: Vec::new(),
+            body_flags: Vec::new(),
+            body_centre: Vec::new(),
+            body_rot: Vec::new(),
+            body_vel: Vec::new(),
+            body_omega: Vec::new(),
+            body_mass: Vec::new(),
+            body_inertia: Vec::new(),
+            body_inv_inertia: Vec::new(),
+            body_prev_centre: Vec::new(),
+            body_prev_rot: Vec::new(),
+            max_angular_speed: DEFAULT_MAX_ANGULAR_SPEED,
+            spin_form: SpinForm::Midpoint,
         }
     }
 }
@@ -200,6 +238,8 @@ impl World {
             self.node_flags[u] = flags;
             // `delete_node` already released the old segment; the slot starts with none.
             self.node_segment[u] = crate::segment::NO_SEGMENT;
+            self.node_body[u] = NO_BODY;
+            self.node_offset[u] = Vec3::ZERO;
             Handle { index: i, generation: self.node_gen[u] }
         } else {
             self.pos.push(pos);
@@ -210,6 +250,8 @@ impl World {
             self.node_flags.push(flags);
             self.node_gen.push(0);
             self.node_segment.push(crate::segment::NO_SEGMENT);
+            self.node_body.push(NO_BODY);
+            self.node_offset.push(Vec3::ZERO);
             Handle { index: self.node_count() - 1, generation: 0 }
         }
     }
@@ -225,6 +267,7 @@ impl World {
             self.node_flags[u] &= !NODE_PINNED;
         }
         self.segment_mass_changed(i);
+        self.body_node_changed(i);
     }
 
     /// Both endpoints must be live nodes (a beam endpoint is always a node, rule 6).
@@ -281,6 +324,7 @@ impl World {
         }
         self.node_flags[i as usize] = 0;
         self.node_gen[i as usize] = self.node_gen[i as usize].wrapping_add(1);
+        self.body_node_left(i);
         self.release_node_segment(i);
         self.free_nodes.push(Reverse(i));
     }

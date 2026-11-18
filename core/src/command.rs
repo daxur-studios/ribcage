@@ -51,6 +51,17 @@ pub const CMD_ADD_SEGMENT: u32 = 11;
 /// stored mass. Rejected, and nothing changed, when the node is not live or is pinned (no mass to
 /// store), already has a segment, or the segment does not exist. Result: 1.
 pub const CMD_SET_NODE_SEGMENT: u32 = 12;
+/// Makes a segment rigid (plan 005, phase 5.2): `a` = segment, `b` = a second segment whose body
+/// (or which, if loose) joins the same body, or `u32::MAX` for none. Any body either segment
+/// already rides is merged in whole. Momentum and angular momentum are kept, no node moves.
+/// Rejected, and nothing changed, when a segment does not exist or the group has no mass or a
+/// degenerate inertia (a rod, a single node). Result: the body's slot (its lowest segment).
+pub const CMD_MAKE_RIGID: u32 = 13;
+/// Releases a segment from its body: `a` = segment. Its nodes go loose with the body's velocity
+/// at their position; the rest stays rigid with the same spin (or goes loose too, if what is left
+/// has no mass or a degenerate inertia). Rejected, and nothing changed, when the segment does not
+/// exist or is not rigid. Result: 1.
+pub const CMD_RELEASE_RIGID: u32 = 14;
 
 /// Result slot value for a rejected record.
 pub const REJECTED: u32 = u32::MAX;
@@ -185,6 +196,17 @@ fn apply_one(w: &mut World, c: &Command) -> u32 {
         },
         CMD_SET_NODE_SEGMENT => {
             if w.assign_node_segment(c.a, c.b) {
+                1
+            } else {
+                REJECTED
+            }
+        }
+        CMD_MAKE_RIGID => {
+            let made = if c.b == u32::MAX { w.make_rigid(&[c.a]) } else { w.make_rigid(&[c.a, c.b]) };
+            made.unwrap_or(REJECTED)
+        }
+        CMD_RELEASE_RIGID => {
+            if w.segment_body(c.a) != crate::body::NO_BODY && w.release(&[c.a]) {
                 1
             } else {
                 REJECTED

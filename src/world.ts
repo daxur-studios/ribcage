@@ -6,7 +6,7 @@
  * in the page.
  */
 
-import type { ApplyResult, BeamView, CoreEvent, HostPtr, SegmentProps, SegmentView } from './core.ts';
+import type { ApplyResult, BeamView, BodyView, CoreEvent, HostPtr, SegmentProps, SegmentView } from './core.ts';
 import { Core } from './core.ts';
 import type { CommandBatch } from './commands.ts';
 
@@ -58,6 +58,11 @@ export class World {
   /** Segments, seams and each node's segment (copies). */
   segments(): SegmentView {
     return this.#core.segments(this.#h);
+  }
+
+  /** Rigid bodies (plan 005, phase 5.2), as copies. */
+  bodies(): BodyView {
+    return this.#core.bodies(this.#h);
   }
 
   /** One segment's mass, centre and inertia from the current positions, or `null`. */

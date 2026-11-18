@@ -2,6 +2,7 @@
 //! index order, beam endpoints rewritten as positions in the packed arrays. The solver
 //! ([`crate::solver`]) is a pure function of this buffer. Islands are connected components of movable nodes ([`build_islands`]).
 
+use crate::body::NO_BODY;
 use crate::real::{Real, Vec3};
 use crate::world::{World, NODE_ALIVE};
 
@@ -60,7 +61,9 @@ pub struct Island {
 /// component and no hashing or iteration order enters. Rebuilt every step.
 pub fn build_islands(world: &World) -> Vec<Island> {
     let n = world.node_count() as usize;
-    let movable = |i: usize| world.node_flags[i] & NODE_ALIVE != 0 && world.inv_mass[i] != 0.0;
+    // A node riding a rigid body (plan 005) is not movable: the body moves it, once per step.
+    let movable = |i: usize| world.node_flags[i] & NODE_ALIVE != 0 && world.inv_mass[i] != 0.0 && world.node_body[i] == NO_BODY;
+    let riding = |i: usize| world.node_body[i] != NO_BODY;
     let mut parent: Vec<u32> = (0..n as u32).collect();
     fn find(parent: &mut [u32], mut x: u32) -> u32 {
         while parent[x as usize] != x {
@@ -124,6 +127,8 @@ pub fn build_islands(world: &World) -> Vec<Island> {
                     }
                 }
             }
+            // A beam inside a body (or from a body to a pin) is not solved: the body is rigid.
+            None if riding(a as usize) || riding(c as usize) => {}
             None => {
                 fixed_beams.push(b);
                 fixed_nodes.push(a);
@@ -157,7 +162,8 @@ fn pack(world: &World, nodes: &[u32], beams: &[u32], packed: &mut [u32], root: u
         island.node_world.push(i);
         island.pos.push(world.pos[u]);
         island.vel.push(world.vel[u]);
-        island.inv_mass.push(world.inv_mass[u]);
+        // A rider is a fixed end to the island (phase 5.2: beams do not push bodies yet).
+        island.inv_mass.push(if world.node_body[u] != NO_BODY { 0.0 } else { world.inv_mass[u] });
         island.force.push(world.force[u]);
         island.radius.push(world.radius[u]);
     }

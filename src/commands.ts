@@ -21,9 +21,15 @@ export const CMD_ADD_THRUSTER = 9;
 export const CMD_SET_THROTTLE = 10;
 export const CMD_ADD_SEGMENT = 11;
 export const CMD_SET_NODE_SEGMENT = 12;
+export const CMD_MAKE_RIGID = 13;
+export const CMD_RELEASE_RIGID = 14;
 
 /** No segment: a root's parent, a node with no segment (`segment::NO_SEGMENT`). */
 export const NO_SEGMENT = 0xffff_ffff;
+/** No body: a loose node, a segment that is not rigid (`body::NO_BODY`). */
+export const NO_BODY = 0xffff_ffff;
+/** Body flag: the slot holds a live body (`body::BODY_ALIVE`). */
+export const BODY_ALIVE = 1;
 /** Segment flag: never simulated as a live lattice once rigid bodies exist (`segment::SEG_NEVER_LIVE`). */
 export const SEG_NEVER_LIVE = 1;
 
@@ -169,6 +175,20 @@ export class CommandBatch {
   /** Puts a node in a segment; its mass joins the segment's stored mass. A node has one segment. */
   setNodeSegment(node: number, segment: number): number {
     return this.#push(CMD_SET_NODE_SEGMENT, node, segment, []);
+  }
+
+  /**
+   * Makes a segment rigid (plan 005, phase 5.2), merged with `withSegment`'s group when given (and
+   * with any body either already rides). Keeps momentum and spin; no node moves. The core's result
+   * is the body's slot (its lowest segment), or rejected for a rod, a single node or no mass.
+   */
+  makeRigid(segment: number, withSegment: number = NO_SEGMENT): number {
+    return this.#push(CMD_MAKE_RIGID, segment, withSegment, []);
+  }
+
+  /** Releases a rigid segment: its nodes go loose with the body's velocity, the rest stays rigid. */
+  releaseRigid(segment: number): number {
+    return this.#push(CMD_RELEASE_RIGID, segment, 0, []);
   }
 
   /** The whole height array as records of six (the last may be shorter), in index order. */

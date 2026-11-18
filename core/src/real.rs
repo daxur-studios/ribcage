@@ -33,6 +33,23 @@ impl Vec3 {
     pub fn length_squared(self) -> Real {
         self.dot(self)
     }
+
+    /// `self × o`, each component two products and one subtraction in a fixed order.
+    pub fn cross(self, o: Vec3) -> Vec3 {
+        Vec3::new(self.y * o.z - self.z * o.y, self.z * o.x - self.x * o.z, self.x * o.y - self.y * o.x)
+    }
+
+    /// Whether all three components are finite.
+    pub fn is_finite(self) -> bool {
+        self.x.is_finite() && self.y.is_finite() && self.z.is_finite()
+    }
+}
+
+impl core::ops::Neg for Vec3 {
+    type Output = Vec3;
+    fn neg(self) -> Vec3 {
+        Vec3::new(-self.x, -self.y, -self.z)
+    }
 }
 
 impl core::ops::Add for Vec3 {

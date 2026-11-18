@@ -3,6 +3,7 @@
 //! Storage rules: docs/research/core-data-layout.md.
 
 pub mod bench;
+pub mod body;
 pub mod command;
 pub mod contact;
 pub mod event;

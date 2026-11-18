@@ -4,7 +4,8 @@
 
 use beam_core::bench::{bench_scene, BenchSpec};
 use beam_core::command::{
-    apply_commands, Command, CMD_ADD_BEAM, CMD_ADD_NODE, CMD_ADD_THRUSTER, CMD_SET_TERRAIN, CMD_SET_THROTTLE, CMD_TERRAIN_HEIGHTS,
+    apply_commands, Command, CMD_ADD_BEAM, CMD_ADD_NODE, CMD_ADD_SEGMENT, CMD_ADD_THRUSTER, CMD_MAKE_RIGID, CMD_RELEASE_RIGID,
+    CMD_SET_NODE_SEGMENT, CMD_SET_TERRAIN, CMD_SET_THROTTLE, CMD_TERRAIN_HEIGHTS,
 };
 use beam_core::event::{Event, EVENT_BREAK};
 use beam_core::ffi::*;
@@ -268,6 +269,115 @@ fn thrust_scene_through_the_boundary_matches_the_direct_world() {
         }
         assert_eq!(rc_state_hash(h), direct);
         assert_eq!(rc_state_hash(h), THRUST_SCENE_120, "golden: {:#018x}", rc_state_hash(h));
+        rc_host_free(h);
+    }
+}
+
+/// Segments and a rigid body after 120 steps, 50 m up with nothing to land on: a unit box of eight
+/// 10 kg nodes (segment 0, its twelve edges) and a unit tetrahedron of four 5 kg nodes (segment 1,
+/// child of 0), one beam between them, and a thruster pushing a box corner along +x. Before step
+/// 10 the box is made rigid; before 40 the tetrahedron joins it; before 80 it is released; before
+/// 100 the box is released too. The same records are built in `test/wasm.test.ts`.
+pub const BODY_SCENE_120: u64 = 0xf585_4564_1d0a_5073;
+
+/// The same scene's state hash after step 60 (the 61st), while the body is alive: this one has the
+/// body sections in it.
+pub const BODY_SCENE_61: u64 = 0x9959_8779_2211_5153;
+
+fn body_scene_setup() -> Vec<Command> {
+    let rec = |kind, a, b, f| Command { kind, a, b, reserved: 0, f };
+    let beam = |a, b, rest| rec(CMD_ADD_BEAM, a, b, [rest, 1e-5, 20.0, 5.0, 10.0, 0.0]);
+    let mut cmds = Vec::new();
+    for k in 0..8u32 {
+        let x = if k & 1 != 0 { 0.5 } else { -0.5 };
+        let y = if k & 2 != 0 { 50.5 } else { 49.5 };
+        let z = if k & 4 != 0 { 0.5 } else { -0.5 };
+        cmds.push(rec(CMD_ADD_NODE, 0, 0, [x, y, z, 0.1, 0.1, 0.0]));
+    }
+    for [x, y, z] in [[2.0, 50.0, 0.0], [3.0, 50.0, 0.0], [2.5, 50.0, 0.8660254037844386], [2.5, 50.816496580927726, 0.28867513459481287]] {
+        cmds.push(rec(CMD_ADD_NODE, 0, 0, [x, y, z, 0.2, 0.1, 0.0]));
+    }
+    for i in 0..8u32 {
+        for bit in [1u32, 2, 4] {
+            if i & bit == 0 {
+                cmds.push(beam(i, i | bit, 1.0));
+            }
+        }
+    }
+    for (a, b) in [(8, 9), (8, 10), (8, 11), (9, 10), (9, 11), (10, 11)] {
+        cmds.push(beam(a, b, 1.0));
+    }
+    cmds.push(beam(1, 8, 1.5));
+    cmds.push(rec(CMD_ADD_SEGMENT, u32::MAX, 0, [0.0; 6]));
+    cmds.push(rec(CMD_ADD_SEGMENT, 0, 0, [0.01, 1e-5, 0.0, 0.0, 0.0, 0.0]));
+    for n in 0..12u32 {
+        cmds.push(rec(CMD_SET_NODE_SEGMENT, n, if n < 8 { 0 } else { 1 }, [0.0; 6]));
+    }
+    cmds.push(rec(CMD_ADD_THRUSTER, 0, 1, [300.0, 0.0, 0.0, 0.0, 0.0, 0.0]));
+    cmds.push(rec(CMD_SET_THROTTLE, 0, 0, [1.0, 0.0, 0.0, 0.0, 0.0, 0.0]));
+    cmds
+}
+
+/// The body commands applied before step `s` (0-based), if any.
+fn body_scene_at(s: u32) -> Vec<Command> {
+    let rec = |kind, a, b| Command { kind, a, b, reserved: 0, f: [0.0; 6] };
+    match s {
+        10 => vec![rec(CMD_MAKE_RIGID, 0, u32::MAX)],
+        40 => vec![rec(CMD_MAKE_RIGID, 1, 0)],
+        80 => vec![rec(CMD_RELEASE_RIGID, 1, 0)],
+        100 => vec![rec(CMD_RELEASE_RIGID, 0, 0)],
+        _ => Vec::new(),
+    }
+}
+
+/// Segment and body commands through the boundary give the same bits as applied directly, and
+/// match the golden that the WebAssembly build is held to.
+#[test]
+fn body_scene_through_the_boundary_matches_the_direct_world() {
+    let mut w = World::new();
+    let mut results = Vec::new();
+    let setup = body_scene_setup();
+    apply_commands(&mut w, &setup, &mut results);
+    assert!(!results.contains(&u32::MAX), "a record was rejected: {results:?}");
+    let (mut spun, mut mid) = (false, 0);
+    for s in 0..120 {
+        let more = body_scene_at(s);
+        if !more.is_empty() {
+            apply_commands(&mut w, &more, &mut results);
+            assert!(!results.contains(&u32::MAX), "step {s}: {results:?}");
+        }
+        step(&mut w);
+        if s == 60 {
+            assert_eq!(w.body_count(), 1);
+            spun = w.body_omega[0].length() > 0.1;
+            mid = state_hash(&w);
+        }
+    }
+    assert!(spun, "the thruster turned the body");
+    assert_eq!(w.body_count(), 0);
+    let direct = state_hash(&w);
+
+    unsafe {
+        let h = rc_host_new();
+        let dst = rc_commands_reserve(h, setup.len() as u32);
+        std::ptr::copy_nonoverlapping(setup.as_ptr(), dst, setup.len());
+        assert_eq!(rc_apply_commands(h), 0, "no record rejected");
+        for s in 0..120 {
+            let more = body_scene_at(s);
+            if !more.is_empty() {
+                let dst = rc_commands_reserve(h, more.len() as u32);
+                std::ptr::copy_nonoverlapping(more.as_ptr(), dst, more.len());
+                assert_eq!(rc_apply_commands(h), 0, "no record rejected");
+            }
+            rc_step(h);
+            if s == 60 {
+                assert_eq!(rc_body_slot_count(h), 2);
+                assert_eq!(rc_state_hash(h), mid);
+                assert_eq!(rc_state_hash(h), BODY_SCENE_61, "golden: {:#018x}", rc_state_hash(h));
+            }
+        }
+        assert_eq!(rc_state_hash(h), direct);
+        assert_eq!(rc_state_hash(h), BODY_SCENE_120, "golden: {:#018x}", rc_state_hash(h));
         rc_host_free(h);
     }
 }
