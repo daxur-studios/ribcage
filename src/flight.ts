@@ -46,17 +46,25 @@ export interface Flight {
   segmentOf: number[] | null;
 }
 
-/**
- * Loads a craft file and builds its setup on the landing field. Throws what `loadCraft` throws.
- * `segments` adds the craft's segment commands to the setup (plan 005); it is off here so the
- * committed hard-landing recording, made before segments existed, is still what recording the hop
- * gives byte for byte. The segment tests turn it on and show it changes no physics.
- */
-export function prepareFlight(craftText: string, field: Terrain = landingField(), options: { segments?: boolean } = {}): Flight {
+/** Options of the flight and landing scenarios. */
+export interface FlightOptions {
+  /**
+   * Make the craft's never-live segments (the engine and pod) rigid bodies at spawn (default true
+   * from plan 005, phase 5.4). `false` rebuilds the all-live craft: no segment commands, so the
+   * setup is byte for byte the one the committed all-live hard landing was recorded from.
+   */
+  rigid?: boolean;
+  /** Send the segment commands (default: the same as `rigid`). `rigid` needs them. */
+  segments?: boolean;
+}
+
+/** Loads a craft file and builds its setup on the landing field. Throws what `loadCraft` throws. */
+export function prepareFlight(craftText: string, field: Terrain = landingField(), options: FlightOptions = {}): Flight {
   const loaded = loadCraft(craftText);
   const setup = new CommandBatch();
   compileTerrain(setup, field);
-  const segmentOf = compileCraft(setup, loaded.craft, { segments: options.segments ?? false });
+  const rigid = options.rigid ?? true;
+  const segmentOf = compileCraft(setup, loaded.craft, { segments: options.segments ?? rigid, rigid });
   return { loaded, field, setup, thrusterCount: loaded.craft.thrusters.length, segmentOf };
 }
 

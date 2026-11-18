@@ -143,14 +143,24 @@ test("a throttle script is checked, and a step with no key adds no commands", ()
 });
 
 test("the setup sends the thruster to the core, and the core accepts every record", async () => {
-  const flight = prepareFlight(HOPPER_TEXT);
-  const world = new World(await loadCore());
-  const r = world.apply(flight.setup);
+  const core = await loadCore();
+  // All-live: the last record is the thruster, result 0, the first thruster.
+  const live = prepareFlight(HOPPER_TEXT, undefined, { rigid: false });
+  const world = new World(core);
+  const r = world.apply(live.setup);
   assert.equal(r.rejected, 0);
-  // The last record is the thruster: result 0, the first thruster.
   assert.equal(r.results[r.results.length - 1], 0);
-  assert.equal(world.nodeCount, flight.loaded.craft.nodes.length);
+  assert.equal(world.nodeCount, live.loaded.craft.nodes.length);
   world.free();
+  // Rigid (the default): the setup ends with one make-rigid per never-live segment, each result
+  // the body's slot (its own segment: the engine is 4, the pod 5), and nothing is rejected.
+  const rigid = prepareFlight(HOPPER_TEXT);
+  const world2 = new World(core);
+  const r2 = world2.apply(rigid.setup);
+  assert.equal(r2.rejected, 0);
+  assert.deepEqual([...r2.results.slice(-2)], [4, 5]);
+  assert.equal(world2.bodies().flags.filter((f) => f !== 0).length, 2);
+  world2.free();
 });
 
 test("the hopper rests on the pad with the engine off: no yield, no break, standing still", async () => {

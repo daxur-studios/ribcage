@@ -571,6 +571,12 @@ function fixTotalMass(nodes: PartNode[], target: number): void {
 export interface CompileCraftOptions {
   /** Emit the segment commands after the craft's thrusters (default true; plan 005, phase 5.1). */
   segments?: boolean;
+  /**
+   * Make every never-live segment rigid at spawn with `CMD_MAKE_RIGID`, after the segment records
+   * (default false; plan 005, phase 5.4). A never-live segment whose parent is also never-live is
+   * made rigid with it, so a chain of never-live segments is one body. Needs the segments.
+   */
+  rigid?: boolean;
 }
 
 /**
@@ -584,10 +590,14 @@ export interface CompileCraftOptions {
  * a segment the seams do not reach becomes a root. A core segment needs its parent to exist first,
  * so records go out in "lowest-numbered segment whose parent is already out" order; for the hopper
  * that is craft order, so the core's numbers equal the craft's. They change no physics.
+ * With `rigid`, `CMD_MAKE_RIGID` records for the never-live segments follow; those do.
  */
 export function compileCraft(batch: CommandBatch, craft: Craft, options: CompileCraftOptions = {}): number[] | null {
   compilePart(batch, craft);
-  if (options.segments === false) return null;
+  if (options.segments === false) {
+    if (options.rigid) throw new Error('compileCraft: rigid needs the segment commands');
+    return null;
+  }
   const count = craft.segments.length;
   // Tree from the seams, discovered breadth-first from segment 0 and then from any segment left over.
   const parent: (number | null)[] = new Array(count).fill(null);
@@ -630,5 +640,17 @@ export function compileCraft(batch: CommandBatch, craft: Craft, options: Compile
     coreOf[pick] = next++;
   }
   for (const [i, n] of craft.nodes.entries()) batch.setNodeSegment(i, coreOf[n.segment]!);
+  if (options.rigid) {
+    // In core order, so a parent's body exists before its child joins it.
+    const craftOf: number[] = new Array(count);
+    for (let s = 0; s < count; s++) craftOf[coreOf[s]!] = s;
+    for (let c = 0; c < count; c++) {
+      const s = craftOf[c]!;
+      if (!craft.segments[s]!.neverLive) continue;
+      const p = parent[s];
+      if (p !== null && craft.segments[p]!.neverLive) batch.makeRigid(c, coreOf[p]!);
+      else batch.makeRigid(c);
+    }
+  }
   return coreOf;
 }

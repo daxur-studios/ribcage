@@ -170,3 +170,69 @@ Built by Opus. `cargo test` (debug and release), `pnpm test` (225 pass, 1 skippe
 ### For 5.4
 
 5.4 (Opus) can start from the files alone. Every beam and contact to a body goes through `Endpoint::Riding`; `CMD_MAKE_RIGID` on the never-live segments at spawn is all `compileCraft(..., { rigid: true })` needs to send. Report the effective mass `1 / w` at each seam node along each seam beam and compare with the 800 : 6.6 case measured here; if every seam is at or below that ratio, close the open question with "no rule needed".
+
+## 2026-11-18 (phase 5.4: the hopper's engine and pod rigid)
+
+Built by Opus. `cargo test`, `pnpm test` (230 pass, 1 skipped: the existing reported-benchmark skip) and `pnpm typecheck` pass. The flight and landing scenarios now spawn the hopper with its engine and pod as rigid bodies. New measurements are in `test/rigid.test.ts`; the bands run rigid in `test/flight.test.ts` and `test/landing.test.ts`.
+
+### Formulas as built
+
+- **[decision]** **`compileCraft(..., { rigid: true })`** appends one `CMD_MAKE_RIGID` per never-live segment after the segment records, in core segment order. A never-live segment whose parent is also never-live is made rigid with the parent, so a chain of never-live segments becomes one body. The hopper has none, so it gets two bodies: the engine (core segment 4, body slot 4, 427.5 kg) and the pod (segment 5, slot 5, 630.2 kg). The setup is accepted with nothing rejected.
+- **[decision]** **`rigid` needs the segment commands.** `segments: false` together with `rigid` throws. In the flight options, `segments` defaults to the same value as `rigid`, so `rigid: false` gives the all-live setup byte for byte, and the all-live hop still compiles to `0xd92f2aad01c0e048` at step 1320.
+- **[decision]** **The default is rigid** (`prepareFlight`, `prepareDrop`, `prepareHop`, and therefore the craft page and the assembly panel's stand height). The legs are not retuned.
+- **[decision]** **The rigid golden.** `test/fixtures/hard-landing-rigid.rcrd` was recorded on purpose with `RIBCAGE_UPDATE_RIGID_FIXTURE=1`. It is 106,876 bytes and ends at hash `0x5a1c383b76d89ea6` at step 1320. The craft page's hop test now checks against it. `hard-landing.rcrd` stays as the all-live regression.
+- **[decision]** **Rest band for the 7 m/s pad case only: 0.5 m/s** (`PAD_7_REST_SPEED`; other cases keep 0.25). This case is "recorded, not required". With every leg crushed, the craft stands on the engine's bottom ring plus the feet and keeps a bounded wobble. Rigid moves 0.30 m/s at rest against the old 0.25 band. The other bands are unchanged.
+
+### Measured
+
+- **[finding]** **Hops.**
+
+  | | Hash at 1320 | Broken | Yields | Legs lost | Tilt | Substeps max | ms/step |
+  |---|---|---|---|---|---|---|---|
+  | All-live | `0xd92f2aad01c0e048` | 43 | 78 | 1001 | 102° | 19 | 1.29 |
+  | Rigid | `0x5a1c383b76d89ea6` | 40 | 76 | 1001 | 103° | 19 | 1.45 |
+
+- **[finding]** **4.8's bands, rigid.**
+  - Standing and 2 m/s pass.
+  - 3 m/s: no beam breaks on any of the five rough spots, and tilt is 0–1°.
+  - 7 m/s: all five rough spots lose a leg and tip over (99–104°). rough-a lost 0101 (40 broken), rough-b 1100 (41), rough-c 1010 (34), rough-d 1001 (39), rough-e 0101 (38).
+  - The 30 scatter spots and 4.7's lift-off checks pass.
+- **[finding]** **The 7 m/s pad case.**
+  - 24 beams break and no leg is lost.
+  - The craft settles on 7–9 nodes of the engine's bottom ring plus the feet.
+  - The pod and engine wobble against each other in xz: about 5 mm all-live and 10 mm rigid.
+  - The pod's peak speed stays flat from 40 s to 120 s: 0.18 m/s all-live, 0.29 m/s rigid. It is a limit cycle that does not grow, not an instability.
+- **[finding]** **No internal strain.** Over the whole rigid hop, the 36 inner beams of the engine and the 28 of the pod change length by at most 3.3e-15 relative, and their strain ratio stays at or below 1.2e-13 of yield. None of them yields or breaks.
+  - "Inner" means both ends are nodes of the body's own segment. The part's nodes that were merged into the tank keep the tank's live segment, so they are not part of the body.
+- **[finding]** **Effective mass ratio at the seams, at spawn.** The ratio is the body's `1 / w` along each seam beam against the live node's mass, with `w = 1/M + (r × n) · I⁻¹ (r × n)`. `I` is summed from point masses about the centre, as the core sums it, and the body's mass is checked against the core's.
+  - Engine: 40 seam beams, ratio 0.88 to 4.02 (for example, 190.8 kg against a 102.5 kg tank node).
+  - Pod: 24 seam beams, ratio 1.84 on every one (about 221 kg against 120.2 kg).
+  - The 5.3 case was 800 : 6.6, or 121. Every hopper seam is at least 30 times below it.
+- **[finding]** **The open question: no rule needed.** Every seam is far below the ratio 5.3 showed converging like a pin, and the bands pass rigid. The craft node-mass budget (20) on live nodes stays the only rule. The question is closed in the plan.
+- **[finding]** **Substeps and ms per step by phase, rigid against all-live** (`test/rigid.test.ts`, after a warm-up run).
+  - Standing is steps 60–359 of a craft placed on the pad with the engine off.
+  - Lift-off is hop steps 0–59.
+  - Coast is from the cut (step 220) to the first ground touch.
+  - Touchdown is the 60 steps after the touch.
+
+  | Phase | Steps | All-live substeps (max / mean) | All-live ms | Rigid substeps (max / mean) | Rigid ms |
+  |---|---|---|---|---|---|
+  | Standing | 300 | 19 / 19.00 | 1.49 | 19 / 19.00 | 1.23 |
+  | Lift-off | 60 | 19 / 19.00 | 1.40 | 19 / 19.00 | 1.21 |
+  | Coast | 47 | 19 / 19.00 | 1.38 | 19 / 19.00 | 1.19 |
+  | Touchdown | 60 | 19 / 19.00 | 1.36 | 19 / 19.00 | 1.15 |
+
+  - The substep counts are identical, as the plan predicted: the live legs set the floor of 19.
+  - Timing is noisy from run to run (the probe hop above measured rigid 12% slower; this run measured it 13–17% faster). Read it as "about the same"; skipping 64 of 612 beams is offset by the body work. The saving comes in 5.8, when legs and tank sleep.
+
+### Not checked
+
+- **[assumption]** Timing was measured on one machine in Node, with no repeated runs or spread. The difference between rigid and all-live is within the noise.
+- **[assumption]** The seam ratio was computed at spawn only. The body's inertia rotates with it, but the ratio's size depends on `r` and `n`, which change little while the seams hold.
+- **[assumption]** The cause of the bounded wobble in the 7 m/s pad case is not traced. It appears all-live too, so it is not caused by the bodies; rigid only doubles its size.
+- **[assumption]** Not run in the browser. The page plays the rigid hop by default, but it does not draw the bodies differently until 5.12.
+- **[oracle-candidate]** Why does a craft resting on a ring of nodes plus its feet keep a bounded limit cycle (0.18–0.29 m/s peak) instead of settling, when one standing on its feet settles?
+
+### For 5.5
+
+5.5 (Opus) can start from the files alone. The engine and pod are bodies in every flight scenario. Joints go through `Endpoint::Riding` as beams do. `test/rigid.test.ts` shows the per-phase measurement to repeat with joints. Both hop goldens must keep replaying.

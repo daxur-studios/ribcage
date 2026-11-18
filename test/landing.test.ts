@@ -26,6 +26,9 @@ import { World } from "../src/world.ts";
 const WASM_PATH = new URL("../target/wasm32-unknown-unknown/release/beam_core.wasm", import.meta.url);
 const HOPPER = readFileSync(new URL("./fixtures/hopper.craft.json", import.meta.url), "utf8");
 const FIXTURE = new URL("./fixtures/hard-landing.rcrd", import.meta.url);
+/** The same hop with the engine and pod rigid (plan 005, phase 5.4), recorded on purpose. */
+const RIGID_FIXTURE = new URL("./fixtures/hard-landing-rigid.rcrd", import.meta.url);
+const RIGID_HOP_HASH = 0x5a1c383b76d89ea6n;
 
 async function loadCore(): Promise<Core> {
   return Core.load(new Uint8Array(readFileSync(WASM_PATH)));
@@ -109,11 +112,11 @@ function safetyBands(label: string, r: Landing): void {
 }
 
 /** The safety checks and the rest window: the checks every chosen run must pass. */
-function commonBands(label: string, r: Landing, unbrokenAtRest: boolean): void {
+function commonBands(label: string, r: Landing, unbrokenAtRest: boolean, restSpeed = REST_SPEED): void {
   safetyBands(label, r);
   assert.ok(r.touchStep > 0 && r.touchStep + 900 <= r.steps - 120, `${label}: touchdown at step ${r.touchStep}, so the rest window (the last 2 s) starts under 15 s after it`);
-  assert.ok(r.bodyRest < REST_SPEED, `${label}: the body still moves at ${r.bodyRest.toFixed(2)} m/s at the end`);
-  if (unbrokenAtRest) assert.ok(r.legRest < REST_SPEED, `${label}: a leg still moves at ${r.legRest.toFixed(2)} m/s at the end`);
+  assert.ok(r.bodyRest < restSpeed, `${label}: the body still moves at ${r.bodyRest.toFixed(2)} m/s at the end`);
+  if (unbrokenAtRest) assert.ok(r.legRest < restSpeed, `${label}: a leg still moves at ${r.legRest.toFixed(2)} m/s at the end`);
 }
 
 test("the hopper stands 20 s on the pad without a single yield", async () => {
@@ -189,16 +192,25 @@ test("on 30 unchosen spots a 7 m/s touchdown usually loses a leg", async (t) => 
   assert.ok(lostOne >= 22, `a leg was lost on only ${lostOne} of ${SCATTER} unchosen spots at 7 m/s`);
 });
 
+/**
+ * The rest band of the 7 m/s pad case only. With every leg crushed the craft stands on the
+ * engine's bottom ring and eight feet and keeps a small bounded wobble: the pod peaks at 0.18 m/s
+ * all-live and 0.29 m/s with the engine and pod rigid, flat from 40 s to 120 s (ER 005, phase 5.4).
+ */
+const PAD_7_REST_SPEED = 0.5;
+
 test("a 7 m/s touchdown on the flat pad: recorded, not required", async (t) => {
   const core = await loadCore();
-  const r = watch(core, prepareDrop(HOPPER, PAD, 7), STEPS);
-  t.diagnostic(`pad at 7 m/s: legs ${r.legs.map((j) => (j ? 1 : 0)).join("")} tilt ${r.tilt.toFixed(0)}° broken ${r.broken.size} yields ${r.yields}`);
-  commonBands("7 m/s pad", r, false);
+  for (const rigid of [true, false]) {
+    const r = watch(core, prepareDrop(HOPPER, PAD, 7, undefined, { rigid }), STEPS);
+    t.diagnostic(`pad at 7 m/s, ${rigid ? "rigid" : "all-live"}: legs ${r.legs.map((j) => (j ? 1 : 0)).join("")} tilt ${r.tilt.toFixed(0)}° broken ${r.broken.size} yields ${r.yields} body at rest ${r.bodyRest.toFixed(2)} m/s`);
+    commonBands(`7 m/s pad ${rigid ? "rigid" : "all-live"}`, r, false, PAD_7_REST_SPEED);
+  }
 });
 
 /** Records the scripted hop for `HOP_STEPS` steps, and what happened to the craft. */
-function recordHop(core: Core): { bytes: Uint8Array; hash: bigint; landing: Landing } {
-  const hop = prepareHop(HOPPER);
+function recordHop(core: Core, rigid = true): { bytes: Uint8Array; hash: bigint; landing: Landing } {
+  const hop = prepareHop(HOPPER, { rigid });
   const landing = watch(core, hop.flight, HOP_STEPS, (b, s) => hopCommands(b, hop, s));
   const world = new World(core);
   const recorder = new Recorder(world);
@@ -214,19 +226,21 @@ function recordHop(core: Core): { bytes: Uint8Array; hash: bigint; landing: Land
   return { bytes: encodeRecording(rec), hash, landing };
 }
 
-test("the scripted hop lands hard in the rough, loses a leg, and tips the craft over", async () => {
-  const core = await loadCore();
-  const { landing: r } = recordHop(core);
-  assert.ok(r.lost.some((l) => l), `no leg was lost (lost ${r.lost.join(",")})`);
-  assert.ok(r.tilt > 60, `tilt ${r.tilt.toFixed(0)}°`);
-  commonBands("hop", r, false);
-  const tank = centreOf(r.final, partNodes(prepareHop(HOPPER).flight.loaded.craft, "tank"));
-  assert.ok(tank[0] > 7.5, `it came down at x ${tank[0].toFixed(1)}, short of the rough area`);
-});
+for (const rigid of [true, false]) {
+  test(`the scripted hop (${rigid ? "rigid" : "all-live"}) lands hard in the rough, loses a leg, and tips the craft over`, async () => {
+    const core = await loadCore();
+    const { landing: r } = recordHop(core, rigid);
+    assert.ok(r.lost.some((l) => l), `no leg was lost (lost ${r.lost.join(",")})`);
+    assert.ok(r.tilt > 60, `tilt ${r.tilt.toFixed(0)}°`);
+    commonBands("hop", r, false);
+    const tank = centreOf(r.final, partNodes(prepareHop(HOPPER).flight.loaded.craft, "tank"));
+    assert.ok(tank[0] > 7.5, `it came down at x ${tank[0].toFixed(1)}, short of the rough area`);
+  });
+}
 
-test("the committed hard landing replays to its hash, and recording it again gives the same file", async () => {
+test("the committed all-live hard landing replays to its hash, and recording it again gives the same file", async () => {
   const core = await loadCore();
-  const { bytes: fresh, hash } = recordHop(core);
+  const { bytes: fresh, hash } = recordHop(core, false);
   if (process.env.RIBCAGE_UPDATE_FIXTURE) writeFileSync(FIXTURE, fresh);
   assert.ok(existsSync(FIXTURE), "fixture missing: run once with RIBCAGE_UPDATE_FIXTURE=1");
   const stored = new Uint8Array(readFileSync(FIXTURE));
@@ -240,4 +254,20 @@ test("the committed hard landing replays to its hash, and recording it again giv
   const atStoredAbi = fresh.slice();
   atStoredAbi.set(stored.subarray(8, 12), 8);
   assert.deepEqual(atStoredAbi, stored);
+});
+
+test("the committed rigid hard landing replays to its hash, and recording it again gives the same file", async () => {
+  const core = await loadCore();
+  const { bytes: fresh, hash } = recordHop(core, true);
+  // Recorded on purpose (plan 005, phase 5.4): run once with RIBCAGE_UPDATE_RIGID_FIXTURE=1.
+  if (process.env.RIBCAGE_UPDATE_RIGID_FIXTURE) writeFileSync(RIGID_FIXTURE, fresh);
+  assert.ok(existsSync(RIGID_FIXTURE), "fixture missing: run once with RIBCAGE_UPDATE_RIGID_FIXTURE=1");
+  const stored = new Uint8Array(readFileSync(RIGID_FIXTURE));
+  assert.ok(stored.byteLength < 150 * 1024, `the fixture is ${stored.byteLength} bytes, over the 150 KB budget`);
+  assert.equal(hash, RIGID_HOP_HASH, "the rigid hop's final hash");
+  const result = replayRecording(() => new World(core), decodeRecording(stored));
+  assert.equal(result.ok, true);
+  assert.equal(result.steps, HOP_STEPS);
+  assert.equal(result.hash, RIGID_HOP_HASH);
+  assert.deepEqual(fresh, stored);
 });

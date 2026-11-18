@@ -25,7 +25,8 @@ import { World } from "../src/world.ts";
 
 const WASM_PATH = new URL("../target/wasm32-unknown-unknown/release/beam_core.wasm", import.meta.url);
 const HOPPER_TEXT = readFileSync(new URL("./fixtures/hopper.craft.json", import.meta.url), "utf8");
-const FIXTURE = new URL("./fixtures/hard-landing.rcrd", import.meta.url);
+/** The page plays the hop rigid (the default from plan 005, phase 5.4). */
+const FIXTURE = new URL("./fixtures/hard-landing-rigid.rcrd", import.meta.url);
 
 async function loadCore(): Promise<Core> {
   return Core.load(new Uint8Array(readFileSync(WASM_PATH)));
@@ -181,7 +182,7 @@ test("keys pressed on the page record to the same bytes and hash as the same thr
   assert.equal(replay.hash, keyedHash);
 });
 
-test("the page's hop scenario ends on the hash of the committed hard landing", async () => {
+test("the page's hop scenario ends on the hash of the committed rigid hard landing", async () => {
   const core = await loadCore();
   const sc = scenarioFor("hop", HOPPER_TEXT);
   assert.ok(sc.script);

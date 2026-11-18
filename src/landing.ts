@@ -12,7 +12,7 @@
 
 import type { CommandBatch } from './commands.ts';
 import { loadCraft, type LoadedCraft } from './parts/craft-file.ts';
-import { prepareFlight, type Flight } from './flight.ts';
+import { prepareFlight, type Flight, type FlightOptions } from './flight.ts';
 import { heightAt, landingField, type Terrain } from './terrain.ts';
 
 /** Standard gravity of the core's default world (`core/src/world.rs`), metres per second squared. */
@@ -102,12 +102,12 @@ function craftPositions(craft: LoadedCraft['craft']): Float64Array {
  * (`speed` 0 puts it just touching). Its lowest point, over the terrain under the nodes as they
  * start, is `dropHeight(speed)` above the ground.
  */
-export function prepareDrop(craftText: string, spot: Spot, speed: number, field: Terrain = landingField()): Flight {
+export function prepareDrop(craftText: string, spot: Spot, speed: number, field: Terrain = landingField(), options: FlightOptions = {}): Flight {
   const base = loadCraft(craftText).file.place;
   const first = loadCraft(placeCraft(craftText, { x: spot.x, y: base.y, z: spot.z, yaw: spot.yaw }));
   const c0 = clearance(first.craft, craftPositions(first.craft), field);
   const y = base.y + dropHeight(speed) - c0;
-  return prepareFlight(placeCraft(craftText, { x: spot.x, y, z: spot.z, yaw: spot.yaw }), field);
+  return prepareFlight(placeCraft(craftText, { x: spot.x, y, z: spot.z, yaw: spot.yaw }), field, options);
 }
 
 /** Indices (into the craft's nodes) of the four feet of leg `leg` (0 to 3) and of the pod's nodes. */
@@ -220,7 +220,7 @@ export interface Hop {
  * nodes of the tank's middle ring that are furthest apart along x, so it pushes toward +x at about
  * the height of the centre of mass. The thruster is appended to the setup, after the craft's own.
  */
-export function prepareHop(craftText: string, options: { segments?: boolean } = {}): Hop {
+export function prepareHop(craftText: string, options: FlightOptions = {}): Hop {
   const flight = prepareFlight(craftText, undefined, options);
   const craft = flight.loaded.craft;
   const tank = partNodes(craft, 'tank');

@@ -13,6 +13,8 @@ import { World } from "../src/world.ts";
 const WASM_PATH = new URL("../target/wasm32-unknown-unknown/release/beam_core.wasm", import.meta.url);
 const HOPPER = readFileSync(new URL("./fixtures/hopper.craft.json", import.meta.url), "utf8");
 const HOP_HASH = 0xd92f2aad01c0e048n;
+/** The hop with the engine and pod rigid (plan 005, phase 5.4): `hard-landing-rigid.rcrd`. */
+const RIGID_HOP_HASH = 0x5a1c383b76d89ea6n;
 
 async function loadCore(): Promise<Core> {
   return Core.load(new Uint8Array(readFileSync(WASM_PATH)));
@@ -21,7 +23,7 @@ async function loadCore(): Promise<Core> {
 /** The hopper's setup with segments, applied to a fresh world. */
 async function hopperWorld() {
   const core = await loadCore();
-  const flight = prepareFlight(HOPPER, undefined, { segments: true });
+  const flight = prepareFlight(HOPPER, undefined, { segments: true, rigid: false });
   const world = new World(core);
   const applied = world.apply(flight.setup);
   assert.equal(applied.rejected, 0);
@@ -181,7 +183,7 @@ test("bad segment records are rejected and the rest of the batch applies", async
 });
 
 test("compileCraft without segments is compilePart, byte for byte", () => {
-  const flight = prepareFlight(HOPPER);
+  const flight = prepareFlight(HOPPER, undefined, { rigid: false });
   const craft = flight.loaded.craft;
   const plain = new CommandBatch();
   compilePart(plain, craft);
@@ -194,10 +196,10 @@ test("compileCraft without segments is compilePart, byte for byte", () => {
   assert.deepEqual(on.bytes.slice(0, plain.bytes.byteLength), plain.bytes.slice(), "segments come after everything else");
 });
 
-/** The scripted hop for 1320 steps, with or without segment commands in its setup. */
+/** The all-live scripted hop for 1320 steps, with or without segment commands in its setup. */
 async function runHop(segments: boolean) {
   const core = await loadCore();
-  const hop = prepareHop(HOPPER, { segments });
+  const hop = prepareHop(HOPPER, { segments, rigid: false });
   const world = new World(core);
   assert.equal(world.apply(hop.flight.setup).rejected, 0);
   for (let s = 0; s < HOP_STEPS; s++) {
@@ -225,14 +227,15 @@ test("the live hop with segment commands emitted still ends at the same hash: se
   console.log(`# hop with segments: full hash 0x${withSegments.state.toString(16)}, physics hash 0x${withSegments.physics.toString(16)}`);
 });
 
-test("the three goldens replay to their hashes", async () => {
+test("the three goldens and the rigid hop golden replay to their hashes", async () => {
   const core = await loadCore();
-  for (const name of ["weak-bridge", "tower-collapse", "hard-landing"]) {
+  for (const name of ["weak-bridge", "tower-collapse", "hard-landing", "hard-landing-rigid"]) {
     const stored = new Uint8Array(readFileSync(new URL(`./fixtures/${name}.rcrd`, import.meta.url)));
     const rec = decodeRecording(stored);
     const result = replayRecording(() => new World(core), rec);
     assert.equal(result.ok, true, `${name}: ${JSON.stringify(result.mismatch)}`);
     assert.equal(result.hash, rec.finalHash, name);
     if (name === "hard-landing") assert.equal(result.hash, HOP_HASH);
+    if (name === "hard-landing-rigid") assert.equal(result.hash, RIGID_HOP_HASH);
   }
 });
