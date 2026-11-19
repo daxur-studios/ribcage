@@ -3,7 +3,7 @@ type: Plan
 title: Rigid by default
 description: Milestone 5 - nodes that ride on rigid bodies, the engine and pod made rigid, hinges, limits, servos and rotors, segments that sleep when barely loaded and wake under load with momentum kept, merging into one body, and a craft that splits into vessels.
 timestamp: 2026-11-18T12:00:00.000Z
-status: active
+status: done
 record: /docs/engineering-records/005_rigid_by_default.md
 tags: [milestone-5, rigid-bodies, joints, sleeping, vessels]
 ---
@@ -110,8 +110,9 @@ Roadmap checks: "rigid bodies with anchors carry engines, pods and wheels" in 5.
   Demo: the tall rocket under thrust, all-live against rigid-by-default, side by side, with the frame-time saving (the slice demo; it becomes the milestone demo in 5.13).
   As built (ER 005, phase 5.12): `src/segment-view.ts` (pure functions: segment modes, beam colours, body and vessel boxes, the root vessel), the craft page's "segment state" view (live orange, asleep green, never-live rigid violet, white body boxes, yellow vessel boxes), a sleeping box that records `CMD_SET_SLEEPING` mid-run, Tall rocket and Test rover buttons, and sleeping, segment counts, bodies and vessels in the status line (substeps and ms per step were already there). The follow camera keeps the root vessel. Tests: `test/segment-view.test.ts` (Node) and `test/browser.test.ts` (headless browser: the hop with sleeping on ends on `0x8e49fe2d420d03e2`, the same as Node, no page errors). A knock wakes the whole craft and it does not sleep again (seen on the page, not fixed); the plan's "wakes part of it and it settles" is not met.
 
-- [ ] **5.13 Milestone wrap.** Build with: Sonnet.
+- [x] **5.13 Milestone wrap.** Build with: Sonnet.
   Timing of the hopper and the tall rocket, sleeping on against off (nodes, beams, bodies, substeps per flight phase, ms per step), the milestone demo from the [demo plan](/docs/research/demo-and-media-plan.md) ("the same tall rocket, all-live against rigid-by-default, wobble side by side, with the frame-time saving"), recorded headless and kept local, the roadmap percentages, and the record closed with what milestone 6 should know (the switch cost, how sleeping behaves under steady distributed loads like drag, whether the wake level needs to change for long slender wings, and the substep floor set by live legs).
+  As built (ER 005, closing section): `scripts/wrap-timing.mjs` prints the timing table (Node, lowest of repeated runs per phase); the table and what milestone 6 should know are in the ER. The sleeping saving is large for the tall rocket standing and under thrust (about 1.2 to 0.3 and 0.2 ms per step) and absent for the hopper, whose live legs hold 19 substeps. The milestone demo is recorded and kept local. No change to `core/`; the open wake items are left for a later phase.
 
 ## Not in this milestone
 

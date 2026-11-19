@@ -605,3 +605,57 @@ Sleeping on: the whole stack is one body from step 180; 31 wakes, 32 sleeps; eve
 - The state view's colours and `modeCounts` are ready for a small legend or panel if wanted; sleeping reads as "asleep" only after the first step.
 - Still open from 5.11: whether a throttle step or a commanded force should wake the whole craft.
 
+
+## 2026-11-19 (phase 5.13: milestone wrap)
+
+No change to `core/` and `core/src/sleep.rs` is untouched. Added `scripts/wrap-timing.mjs` (`node --experimental-strip-types scripts/wrap-timing.mjs [repeats]`), which runs the scripted hop (`prepareHop`, `hopCommands`) and the 5.11 rocket (`runTallRocket`, so `tallRocketCommands`) in Node and prints the table; it keeps the lowest ms per step of nine runs per phase to shed noise. Sleeping off for the hopper is the true all-live craft (`segments: false, rigid: false`), whose hash is the golden; sleeping on is the flight default. The goldens replay unchanged: all-live hop `0xd92f2aad01c0e048`, rigid hop `0x8e49fe2d420d03e2` (both seen in this script's output), and weak bridge, tower collapse and hard landing in their existing tests.
+
+### Timing (Node, WebAssembly core, one machine, nine runs, lowest per phase)
+
+| craft | phase | sleeping | nodes | beams | bodies | substeps/step | ms/step |
+|---|---|---|---|---|---|---|---|
+| hopper | lift-off | off | 123 | 612 | 0 (all live) | 19.0 | 1.27 |
+| hopper | thrust | off | 123 | 612 | 0 | 19.0 | 1.26 |
+| hopper | coast | off | 123 | 612 | 0 | 19.0 | 1.25 |
+| hopper | touchdown | off | 123 | 612 | 0 | 19.0 | 1.19 |
+| hopper | rest | off | 123 | 612 | 0 | 19.0 | 1.32 |
+| hopper | lift-off | on | 123 | 612 | 2.0 | 19.0 | 1.47 |
+| hopper | thrust | on | 123 | 612 | 2.8 | 15.5 | 0.79 |
+| hopper | coast | on | 123 | 612 | 2.0 | 19.0 | 1.32 |
+| hopper | touchdown | on | 123 | 612 | 2.0 | 19.0 | 1.37 |
+| hopper | rest | on | 123 | 612 | 2.6 | 19.0 | 1.63 |
+| rocket | standing | off | 147 | 808 | 2 | 11.0 | 1.23 |
+| rocket | thrust | off | 147 | 808 | 2 | 11.0 | 1.31 |
+| rocket | knock | off | 147 | 808 | 2 | 11.0 | 1.19 |
+| rocket | settle | off | 147 | 808 | 2 | 11.0 | 1.25 |
+| rocket | standing | on | 147 | 808 | 1 to 2 | 6.0 | 0.34 |
+| rocket | thrust | on | 147 | 808 | 1 to 2 | 4.7 | 0.23 |
+| rocket | knock | on | 147 | 808 | 2 | 11.0 | 1.15 |
+| rocket | settle | on | 147 | 808 | 2 | 11.0 | 1.24 |
+
+"Bodies" is rigid bodies alive (all-live runs have none managed; the rocket column is as logged in 5.11, where all-live counts the always-rigid pod and engine). Run to run, ms per step moved by about 10%; the substep columns do not move.
+
+- **The rocket gains a lot while it is quiet:** about a quarter of the time standing and a fifth under thrust, at half or less of the substeps. After the knock it gains nothing, because the whole craft is awake and sways.
+- **The hopper gains almost nothing, and rest and touchdown cost a little more with sleeping on.** The live legs hold 19 substeps in every phase except thrust, where they sleep and it drops to 15.5. The extra 5 to 25% with sleeping on in lift-off, touchdown and rest is the sleep bookkeeping and the extra body work, within the noise band at its low end. This is the honest answer for milestone 5's saving: it pays on a stack of tanks, not on the legged hopper.
+- **Demo** (local, `artifacts/videos/m5-13/`, 24 s, not committed): the same rocket on two pages, all-live left and sleeping right, thrust then the knock, with the saving printed from the table above (the pages' own readings are not used). The header text quotes the standing and thrust figures of an earlier nine-run pass (1.28 to 0.38 and 1.24 to 0.24); this table is the later pass and is the one to cite.
+
+### What milestone 6 should know
+
+- **The switch cost.** Sleeping changes the island's substep count when segments join or leave a body, and that shows as a small jolt (5.11: tip 296 against 289 mm under the knock, 2 to 8% worse than all-live, as on the hop). Every switch kept momentum and spin to rounding (1e-12 or better, in the equivalence test and the rocket) and added no energy. The computing cost of a switch pass is not separately measured; the table above includes it, and in the hopper it is inside the noise.
+- **Steady distributed loads such as drag.** Not measured, nothing in the core applies drag yet. What is known: the stress estimate subtracts mass times acceleration from the net load, so a load that is uniform on a segment and balanced by its acceleration reads as nothing and the segment can sleep, but a steady load that a body cannot shed (drag against a tether, a wing held in a stream) reads as a force the seams carry and keeps the segment awake. The risk is chatter at the threshold: a load that sits between sleep and wake level wakes, loses the sleep, sleeps again. 5.9 tried a higher sleep ceiling for damaged segments and it chattered, so hysteresis (the 0.25 and 0.30 levels) is what keeps it quiet, and milestone 6 should log wakes and sleeps per second on a plane in steady flight before trusting it.
+- **Does the wake level need to change for long slender wings?** Open and unmeasured. A long wing is the slender case: low stiffness, large tip excursions, loads spread along the span. The 5.11 finding (slender stacks buckle and sway more than anything sleeping does) says the stress reading may underrate a flexing slender member until it moves. Milestone 6 should keep wings never-sleeping at first (a segment flag exists) and measure before lowering the wake level. No tuning here.
+- **The substep floor set by live legs.** A leg alone needs 19 substeps, and the hopper's total follows its most demanding live island. While legs are live nothing else on the craft can bring the count down, as the hopper rows show. Lift and drag on skin triangles add forces, not stiffness, so they should not raise the floor, but a wing as stiff as a leg per unit mass would. Retuning the leg is still out of scope.
+
+### Open items, and where they stand
+
+All of these are left open for a later phase; none is fixed in this milestone.
+
+- **A knock wakes the whole craft and it never sleeps again** (5.11 and 5.12). Both the throttle-step wake and the force-command wake wake every segment in the vessel, and the sway after a 30 kN knock is too large to fall below the sleep level, even after 120 s. A later phase should wake only the segments a command acts on and pick a quieter threshold after a large sway. Open.
+- **The torn-segment rule keeps a broken leg live forever** (5.10). A segment cut inside is marked torn and never sleeps. With many wrecks lying about that costs substeps. A later phase can re-segment the torn segment into its pieces so each can sleep. Open.
+- **[oracle-candidate]** Should a throttle step or a commanded force wake the whole craft, or only the segments it acts on? Waking all prevents any re-sleep after a knock, and it is the root of the first item. Open, an owner decision; not asked here.
+
+### Not checked
+
+- Timing is Node on one machine (software, no GPU); it says nothing about the browser or about other machines. No native (`cargo run --release`) run of the rocket. The rocket's all-live column is `sleeping: false` with the rigid default (pod and engine always rigid), as in 5.11; the hopper's all-live is the true all-live craft.
+- Drag, slender wings and the cost of one switch pass by itself are discussed from what the core does, not measured.
+- Video: headless Chromium capture with software WebGL; no narration; not watched frame by frame, only the contact sheet.
