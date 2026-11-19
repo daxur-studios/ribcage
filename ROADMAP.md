@@ -98,8 +98,11 @@ Planning has two stages. The costly-to-redo milestones (5 and 8) have an early d
 
 ### 6. Aerodynamics
 
-- [ ] Lift and drag act per skin triangle, and a simple plane flies and can be steered.
+- [ ] Parts declare aero elements (wing strips, body stations, plates) tied to nodes; anything undeclared gets an automatic body station, so legs and struts always get drag.
+- [ ] Lift and drag act per element (strips with stall, stations with crossflow and body lift), and a simple plane flies and can be steered.
+- [ ] Air forces do not wake sleeping bodies by themselves, and a craft in flight never sleeps.
 - [ ] A wing flexes under load and snaps in a hard turn.
+- Later passes, not in this milestone: wing interference and downwash, Mach regimes, ground effect, per-triangle pressure for heating and hypersonic flow.
 
 ### 7. Ground and water
 
