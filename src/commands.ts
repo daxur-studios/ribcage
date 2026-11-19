@@ -33,6 +33,12 @@ export const CMD_SET_SLEEPING = 17;
 export const CMD_BREAK_BEAM = 18;
 /** Sets the air: density, scale height, wind, speed of sound (plan 006, phase 6.1). See `CommandBatch.setAir`. */
 export const CMD_SET_AIR = 19;
+/** Adds an aero element (plan 006, phase 6.2). See `CommandBatch.addAeroElement`. */
+export const CMD_ADD_AERO_ELEMENT = 20;
+/** Adds a weighted node to the newest aero element. See `CommandBatch.addAeroNode`. */
+export const CMD_ADD_AERO_NODE = 21;
+/** Sets an aero element's frame nodes. See `CommandBatch.setAeroFrame`. */
+export const CMD_SET_AERO_FRAME = 22;
 /** Joint drive modes (`joint::JOINT_FREE`, `JOINT_SERVO`, `JOINT_ROTOR`). */
 export const JOINT_FREE = 0;
 export const JOINT_SERVO = 1;
@@ -254,6 +260,28 @@ export class CommandBatch {
    */
   setAir(rho0: number, scaleHeight: number, wind: readonly [number, number, number], soundSpeed: number): number {
     return this.#push(CMD_SET_AIR, 0, 0, [rho0, scaleHeight, wind[0], wind[1], wind[2], soundSpeed]);
+  }
+
+  /**
+   * Adds an aero element (plan 006, phase 6.2). Kind 1 is a body station; `coef` is
+   * `[A_front, C_A, A_base, A_plan, C_base]` (finite, zero or more; missing ones are zero). The
+   * result is the element index. Follow with `addAeroNode` for each node and `setAeroFrame`.
+   */
+  addAeroElement(kind: number, coef: readonly number[]): number {
+    const f = [0, 0, 0, 0, 0, 0];
+    for (let i = 0; i < Math.min(coef.length, 6); i++) f[i] = coef[i]!;
+    return this.#push(CMD_ADD_AERO_ELEMENT, kind, 0, f);
+  }
+
+  /** Adds a weighted node to the newest aero element (weight above zero; weights are normalised). */
+  addAeroNode(element: number, node: number, weight: number): number {
+    return this.#push(CMD_ADD_AERO_NODE, element, node, [weight]);
+  }
+
+  /** Sets an aero element's frame nodes; a station needs `[tail, nose]`. Unused slots are omitted. */
+  setAeroFrame(element: number, frame: readonly number[]): number {
+    const f = [frame[1] ?? 0, frame[2] ?? 0xffffffff, frame[3] ?? 0xffffffff];
+    return this.#push(CMD_SET_AERO_FRAME, element, frame[0] ?? 0xffffffff, f);
   }
 
   /** The whole height array as records of six (the last may be shorter), in index order. */

@@ -52,7 +52,7 @@ Roadmap checks (a quarter of the milestone each): "parts declare aero elements .
   Done when: the channel and flag exist, are tested, and nothing else moved.
   Demo: skip.
 
-- [ ] **6.2 Body stations in the core.** Build with: Sonnet (known formulas, the element arrays).
+- [x] **6.2 Body stations in the core.** Build with: Sonnet (known formulas, the element arrays).
   `core/src/aero.rs`: the element arrays, `CMD_ADD_AERO_ELEMENT` (kind, node list with weights, frame nodes, coefficients; bad records rejected with the rest of the batch applying), `apply_aero` at the place in "Settled", the station formulas as a pure function, forces through `add_env_force` by weight; elements and air in the hash once one exists. Check that rider nodes' world velocities at step start are the body's `V + ω × r`; if not, the station reads the body's velocity at the weighted point, and the record says which. ABI 12.
   **Test:** the station function against hand values (axial only, 90° crossflow, 10° and 30° with slender-body lift, base pressure on and off); a single-node station falls to terminal speed `sqrt(2 m g / (ρ A_f C_A))` within 0.5%; a station on a rigid body and the same one live give the same force; wind on a resting station gives the formula force; with the estimate on, a tethered station's air load appears in the seam force within 1%; ascending order and the same run twice give the same hash, natively and in WebAssembly; the goldens replay.
   Done when: one element kind is complete end to end.

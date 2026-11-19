@@ -364,3 +364,24 @@ test("the reported benchmark scene gives the native hash", { skip: !process.env.
   );
   core.hostFree(h);
 });
+
+/** A falling two-node rod with one body station, after 120 steps (`hash_is_deterministic_and_absent_without_elements` in core/tests/aero_station.rs). */
+const AERO_ROD_120 = 0xa79d7c3b74677923n;
+
+test("an aero station gives the native hash", async () => {
+  const core = await Core.load(loadBytes());
+  const h = core.hostNew();
+  const setup = new CommandBatch();
+  setup.addNode(0, 1000, 0, 0.02, 0.05);
+  setup.addNode(0, 1001, 0, 0.02, 0.05);
+  setup.addBeam(0, 1, { rest: 1, compliance: 1e-8, damping: 50, yieldStrain: 0.5, breakStrain: 1 });
+  setup.setAir(1.225, 0, [0, 0, 0], 340);
+  setup.addAeroElement(1, [1, 2, 0.5, 1, 0.3]);
+  setup.addAeroNode(0, 0, 0.5);
+  setup.addAeroNode(0, 1, 0.5);
+  setup.setAeroFrame(0, [0, 1]);
+  assert.equal(core.applyCommands(h, setup).rejected, 0);
+  for (let i = 0; i < 120; i++) core.step(h);
+  assert.equal(core.stateHash(h), AERO_ROD_120);
+  core.hostFree(h);
+});

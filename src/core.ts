@@ -10,7 +10,7 @@
 import { COMMAND_BYTES, type CommandBatch } from './commands.ts';
 
 /** The ABI version this loader was written for (`ABI_VERSION` in core/src/ffi.rs). */
-export const ABI_VERSION = 11;
+export const ABI_VERSION = 12;
 
 /** A host pointer inside the core (an integer to JavaScript). */
 export type HostPtr = number;

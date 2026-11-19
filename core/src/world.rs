@@ -162,6 +162,8 @@ pub struct World {
     pub vessel: crate::vessel::Vessel,
     /// The air (phase 6.1): settings and density. In the state hash once `CMD_SET_AIR` has run.
     pub air: crate::aero::Air,
+    /// The aero elements (phase 6.2). In the state hash once one exists.
+    pub aero_el: crate::aero::Elements,
 }
 
 impl Default for World {
@@ -240,6 +242,7 @@ impl Default for World {
             sleep: crate::sleep::Sleep::default(),
             vessel: crate::vessel::Vessel::default(),
             air: crate::aero::Air::default(),
+            aero_el: crate::aero::Elements::default(),
         }
     }
 }

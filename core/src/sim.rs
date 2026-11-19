@@ -63,6 +63,7 @@ fn step_inner(world: &mut World, choice: Choice) -> StepStats {
     crate::estimate::begin_step(world);
     // Thrust goes in as ordinary external force, from the positions the step starts with.
     apply_thrust(world);
+    crate::aero::apply_aero(world);
     crate::estimate::take_forces(world);
     if world.joint_count() > 0 {
         world.joints_begin_step();
@@ -371,6 +372,29 @@ fn physics_hash_state(world: &World) -> u64 {
         mix_real(&mut h, a.scale_height);
         mix_vec(&mut h, a.wind);
         mix_real(&mut h, a.sound_speed);
+    }
+    // Aero elements (phase 6.2), only once one exists.
+    let el = &world.aero_el;
+    if !el.kind.is_empty() {
+        mix(&mut h, el.kind.len() as u64);
+        for e in 0..el.kind.len() {
+            mix(&mut h, el.kind[e] as u64);
+            mix(&mut h, el.node_start[e] as u64);
+            mix(&mut h, el.node_count[e] as u64);
+            for k in 0..4 {
+                mix(&mut h, el.frame[e][k] as u64);
+                mix(&mut h, el.frame_gen[e][k] as u64);
+            }
+            for k in 0..6 {
+                mix_real(&mut h, el.coef[k][e]);
+            }
+            mix_real(&mut h, el.deflection[e]);
+        }
+        for k in 0..el.node.len() {
+            mix(&mut h, el.node[k] as u64);
+            mix(&mut h, el.node_gen[k] as u64);
+            mix_real(&mut h, el.weight[k]);
+        }
     }
     h
 }

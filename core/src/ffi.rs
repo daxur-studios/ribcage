@@ -40,9 +40,11 @@ use crate::world::{BeamSpec, World};
 /// and 7) and its readers (`rc_vessel_*`), and puts each node's vessel in the state hash (only
 /// once a split has happened). 11 added the air settings (command kind 19, `CMD_SET_AIR`) and the
 /// segment flag never-sleep (bit 1), and puts the air settings in both hashes (only once the
-/// command has run). Nothing else changed, so a recording made at ABI 2 to 10 still
+/// command has run). 12 added the aero elements (command kinds 20 to 22, `CMD_ADD_AERO_ELEMENT`,
+/// `CMD_ADD_AERO_NODE`, `CMD_SET_AERO_FRAME`) and puts them in both hashes (only once an element
+/// exists). Nothing else changed, so a recording made at ABI 2 to 11 still
 /// means the same thing and replays (`src/recording.ts`).
-pub const ABI_VERSION: u32 = 11;
+pub const ABI_VERSION: u32 = 12;
 
 /// Bytes per command record, for the host to check against its own layout.
 #[no_mangle]

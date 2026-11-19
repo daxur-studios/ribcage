@@ -91,6 +91,18 @@ pub const CMD_BREAK_BEAM: u32 = 18;
 /// constant density), `f[2..5]` = wind velocity x, y, z in m/s (finite), `f[5]` = speed of sound in
 /// m/s (finite, above zero). The settings are replaced whole. Result: 1.
 pub const CMD_SET_AIR: u32 = 19;
+/// Adds an aero element (plan 006, phase 6.2; see [`crate::aero`]): `a` = element kind (1 = body
+/// station), `f[0..5]` = `[A_front, C_A, A_base, A_plan, C_base, 0]` (finite, zero or more).
+/// Rejected for an unknown kind or a bad coefficient. Result: the element index. The element does
+/// nothing until it has a frame and nodes.
+pub const CMD_ADD_AERO_ELEMENT: u32 = 20;
+/// Adds a weighted node to an aero element (phase 6.2): `a` = element (must be the newest),
+/// `b` = node (live), `f[0]` = weight (finite, above zero). Result: 1, or rejected.
+pub const CMD_ADD_AERO_NODE: u32 = 21;
+/// Sets an aero element's frame (phase 6.2): `a` = element, `b` = frame node 0 (a station's tail),
+/// `f[0..3]` = frame nodes 1..3 as whole numbers (`u32::MAX` = none; a station's nose is node 1).
+/// The first two are required, live and distinct. Result: 1, or rejected.
+pub const CMD_SET_AERO_FRAME: u32 = 22;
 /// Result slot value for a rejected record.
 pub const REJECTED: u32 = u32::MAX;
 
@@ -316,6 +328,34 @@ fn apply_one(w: &mut World, c: &Command) -> u32 {
                 sound_speed: sound,
             };
             1
+        }
+        CMD_ADD_AERO_ELEMENT => {
+            if !finite(&c.f) {
+                return REJECTED;
+            }
+            w.add_aero_element(c.a, c.f).unwrap_or(REJECTED)
+        }
+        CMD_ADD_AERO_NODE => {
+            if !finite(&c.f) {
+                return REJECTED;
+            }
+            if w.add_aero_node(c.a, c.b, c.f[0]) {
+                1
+            } else {
+                REJECTED
+            }
+        }
+        CMD_SET_AERO_FRAME => {
+            let whole = |x: Real| x >= 0.0 && x < 4_294_967_296.0 && x == (x as u32) as Real;
+            if !(whole(c.f[0]) && whole(c.f[1]) && whole(c.f[2])) {
+                return REJECTED;
+            }
+            let frame = [c.b, c.f[0] as u32, c.f[1] as u32, c.f[2] as u32];
+            if w.set_aero_frame(c.a, frame) {
+                1
+            } else {
+                REJECTED
+            }
         }
         _ => REJECTED,
     }

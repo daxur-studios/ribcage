@@ -21,7 +21,7 @@ import { ABI_VERSION, type ApplyResult } from './core.ts';
 import { World } from './world.ts';
 
 export const FORMAT_VERSION = 1;
-/** The oldest core ABI whose recordings still replay (2: before the terrain commands; 3 to 11 also read). */
+/** The oldest core ABI whose recordings still replay (2: before the terrain commands; 3 to 12 also read). */
 export const MIN_READABLE_ABI = 2;
 const MAGIC = [0x52, 0x43, 0x52, 0x44]; // "RCRD"
 const HEADER_BYTES = 40;
@@ -233,7 +233,8 @@ export function decodeRecording(bytes: Uint8Array): Recording {
   // sleeping command (kind 17) and a hash section that exists only once it has run. ABI 10 added
   // the break command (kind 18), two event kinds and a hash section that exists only once a split
   // has happened. ABI 11 added the air command (kind 19), the never-sleep segment flag and a hash
-  // section that exists only once the air command has run. An older list still means the same commands; only its end hash can move, and only
+  // section that exists only once the air command has run. ABI 12 added the aero element commands
+  // (kinds 20 to 22) and a hash section that exists only once an element exists. An older list still means the same commands; only its end hash can move, and only
   // where a beam broke in a world with segments (the rigid hop, re-recorded on purpose in 5.10).
   if (abi < MIN_READABLE_ABI || abi > ABI_VERSION) {
     throw new Error(`recorded with core ABI ${abi}, this build reads ABI ${MIN_READABLE_ABI} to ${ABI_VERSION}`);

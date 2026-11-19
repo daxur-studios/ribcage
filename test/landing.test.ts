@@ -272,7 +272,7 @@ test("the committed rigid hard landing replays to its hash, and recording it aga
   assert.equal(result.steps, HOP_STEPS);
   assert.equal(result.hash, RIGID_HOP_HASH);
   // Same bytes except the ABI field: the stored file was made at ABI 10 (re-recorded in phase 5.10);
-  // ABI 11 only added a command kind and a segment flag, and replaying it above is the real check.
+  // ABI 11 and 12 only added command kinds and a segment flag, and replaying it above is the real check.
   const atStoredAbi = fresh.slice();
   atStoredAbi.set(stored.subarray(8, 12), 8);
   assert.deepEqual(atStoredAbi, stored);
