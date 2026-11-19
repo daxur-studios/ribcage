@@ -201,12 +201,12 @@ impl World {
     }
 
     /// Per segment: may this module put it to sleep? Not never-live, not rigid already, with
-    /// mass, no frozen or pinned node, and no joint node (a joint's two sides must stay on two
-    /// bodies, and a moving joint wakes it anyway).
+    /// mass, no frozen or pinned node, no joint node (a joint's two sides must stay on two
+    /// bodies, and a moving joint wakes it anyway), and not cut inside into two vessels (phase 5.10).
     pub fn sleep_eligible(&self) -> Vec<bool> {
         let segs = self.seg_parent.len();
         let mut ok: Vec<bool> = (0..segs)
-            .map(|s| self.seg_flags[s] & SEG_NEVER_LIVE == 0 && self.seg_body[s] == NO_BODY)
+            .map(|s| self.seg_flags[s] & SEG_NEVER_LIVE == 0 && self.seg_body[s] == NO_BODY && !self.segment_torn(s as u32))
             .collect();
         let mut mass = vec![false; segs];
         for i in 0..self.pos.len() {
@@ -246,7 +246,7 @@ impl World {
     }
 
     /// Momentum, angular momentum about the origin and kinetic energy of every live node with mass.
-    fn sleep_totals(&self) -> (Vec3, Vec3, Real) {
+    pub(crate) fn sleep_totals(&self) -> (Vec3, Vec3, Real) {
         let (mut p, mut l, mut e) = (Vec3::ZERO, Vec3::ZERO, 0.0 as Real);
         for i in 0..self.pos.len() {
             if self.node_flags[i] & NODE_ALIVE == 0 || self.inv_mass[i] == 0.0 {
@@ -267,6 +267,9 @@ impl World {
             out[s] = reason;
         }
         for k in 0..self.seam_a.len() {
+            if !self.seam_in_one_vessel(k) {
+                continue;
+            }
             let (a, b) = (self.seam_a[k] as usize, self.seam_b[k] as usize);
             let other = if a == s {
                 b
@@ -294,7 +297,8 @@ impl World {
 
     /// Every segment joined to `s` through seams, broken or not, gets `reason`: a crash loads the
     /// whole craft within the step (a stress wave crosses a few metres of structure in about a
-    /// millisecond), so all of it wakes before the solve (ER 005, 5.9).
+    /// millisecond), so all of it wakes before the solve (ER 005, 5.9). "The craft" is `s`'s vessel:
+    /// a seam between two vessels is not crossed (phase 5.10).
     fn sleep_spread_craft(&self, s: usize, reason: u32, out: &mut [u32]) {
         let mut seen = vec![false; out.len()];
         seen[s] = true;
@@ -303,7 +307,7 @@ impl World {
             grew = false;
             for k in 0..self.seam_a.len() {
                 let (a, b) = (self.seam_a[k] as usize, self.seam_b[k] as usize);
-                if seen[a] != seen[b] {
+                if seen[a] != seen[b] && self.seam_in_one_vessel(k) {
                     seen[a] = true;
                     seen[b] = true;
                     grew = true;

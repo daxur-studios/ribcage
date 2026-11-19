@@ -140,7 +140,8 @@ fn compute(world: &World, est: &mut Estimate) {
     // Leaves to root: a parent's index is always lower than its child's.
     for s in (0..segs).rev() {
         let p = world.seg_parent[s];
-        if p != NO_SEGMENT {
+        // Per vessel (phase 5.10): a child split off carries nothing to its old parent.
+        if p != NO_SEGMENT && world.segment_vessel(p) == world.segment_vessel(s as u32) {
             force[p as usize] = force[p as usize] + force[s];
             moment[p as usize] = moment[p as usize] + moment[s];
         }

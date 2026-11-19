@@ -24,8 +24,8 @@ import { World } from "../src/world.ts";
 const WASM_PATH = new URL("../target/wasm32-unknown-unknown/release/beam_core.wasm", import.meta.url);
 const HOPPER = readFileSync(new URL("./fixtures/hopper.craft.json", import.meta.url), "utf8");
 const HOP_HASH = 0xd92f2aad01c0e048n;
-/** The rigid hop with sleeping off (the 5.4 to 5.8 default): the estimate is compared against the measurement here. */
-const RIGID_HOP_HASH = 0x5a1c383b76d89ea6n;
+/** The rigid hop with sleeping off (the 5.4 to 5.8 default): the estimate is compared against the measurement here. Phase 5.10: the vessel ids enter the hash once leg 0 is cut off (was 0x5a1c383b76d89ea6; the physics hash is unchanged). */
+const RIGID_HOP_HASH = 0xc5612d988a0ccf1fn;
 const loadCore = async (): Promise<Core> => Core.load(new Uint8Array(readFileSync(WASM_PATH)));
 
 /** Per-seam traces of a run: estimated and measured worst ratio per step. */

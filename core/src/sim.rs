@@ -116,6 +116,9 @@ fn step_inner(world: &mut World, choice: Choice) -> StepStats {
             world.est.contact[i] = world.est.contact[i] + j;
         }
     }
+    // Splitting into vessels (phase 5.10): before the estimate and sleeping read the step, so both
+    // see the vessels it ended with. No-op without segments or without a cut.
+    world.vessel_after_solve(done);
     crate::estimate::finish_step(world);
     world.sleep_after_step(done);
     for f in world.force.iter_mut() {
@@ -245,6 +248,15 @@ pub fn state_hash(world: &World) -> u64 {
             mix_real(&mut h, f.x);
             mix_real(&mut h, f.y);
             mix_real(&mut h, f.z);
+        }
+    }
+    // Vessels (phase 5.10), only once a split has happened: before it every node is in vessel 0 and
+    // the world hashes as before. Every node slot's vessel, in index order, and the next id.
+    if world.vessel.ever {
+        mix(&mut h, world.vessel.next as u64);
+        mix(&mut h, world.pos.len() as u64);
+        for i in 0..world.pos.len() as u32 {
+            mix(&mut h, world.node_vessel(i) as u64);
         }
     }
     // Which segments a moving joint triggered in the last step, only once a joint exists.

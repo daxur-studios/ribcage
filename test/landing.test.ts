@@ -28,8 +28,8 @@ const HOPPER = readFileSync(new URL("./fixtures/hopper.craft.json", import.meta.
 const FIXTURE = new URL("./fixtures/hard-landing.rcrd", import.meta.url);
 /** The same hop with the engine and pod rigid (plan 005, phase 5.4), recorded on purpose. */
 const RIGID_FIXTURE = new URL("./fixtures/hard-landing-rigid.rcrd", import.meta.url);
-/** Re-recorded with sleeping on, the flight default from plan 005, phase 5.9 (was 0x5a1c383b76d89ea6 sleeping off). */
-const RIGID_HOP_HASH = 0xa08c8113b3a581c7n;
+/** Re-recorded with sleeping on, the flight default from plan 005, phase 5.9 (was 0x5a1c383b76d89ea6 sleeping off), and again in phase 5.10: leg 0 cut off becomes vessel 1 and, torn, no longer sleeps (was 0xa08c8113b3a581c7). */
+const RIGID_HOP_HASH = 0x8e49fe2d420d03e2n;
 
 async function loadCore(): Promise<Core> {
   return Core.load(new Uint8Array(readFileSync(WASM_PATH)));
@@ -260,7 +260,7 @@ test("the committed all-live hard landing replays to its hash, and recording it 
 test("the committed rigid hard landing replays to its hash, and recording it again gives the same file", async () => {
   const core = await loadCore();
   const { bytes: fresh, hash } = recordHop(core, true);
-  // Recorded on purpose (plan 005, phase 5.4; again with sleeping on in 5.9): run once with
+  // Recorded on purpose (plan 005, phase 5.4; again with sleeping on in 5.9, and for the split in 5.10): run once with
   // RIBCAGE_UPDATE_RIGID_FIXTURE=1.
   if (process.env.RIBCAGE_UPDATE_RIGID_FIXTURE) writeFileSync(RIGID_FIXTURE, fresh);
   assert.ok(existsSync(RIGID_FIXTURE), "fixture missing: run once with RIBCAGE_UPDATE_RIGID_FIXTURE=1");
@@ -271,6 +271,6 @@ test("the committed rigid hard landing replays to its hash, and recording it aga
   assert.equal(result.ok, true);
   assert.equal(result.steps, HOP_STEPS);
   assert.equal(result.hash, RIGID_HOP_HASH);
-  // Same bytes: the stored file was made at this ABI (9, phase 5.9).
+  // Same bytes: the stored file was made at this ABI (10, re-recorded in phase 5.10).
   assert.deepEqual(fresh, stored);
 });

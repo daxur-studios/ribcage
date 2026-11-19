@@ -21,6 +21,14 @@ pub const EVENT_WAKE: u32 = 4;
 /// A segment went to sleep (phase 5.8). `index` is the segment; `value` is its last reading as a
 /// fraction of yield.
 pub const EVENT_SLEEP: u32 = 5;
+/// The structure fell apart and a new vessel was split off (phase 5.10). `index` is the new
+/// vessel's id; `value` is the id of the vessel it came from, as a `Real` (`u32::MAX` for a piece
+/// made only of nodes added since the last check). The new vessel's segments follow at once, as
+/// [`EVENT_VESSEL_SEGMENT`] records. One per new vessel, in order of each piece's lowest node.
+pub const EVENT_SPLIT: u32 = 6;
+/// One segment of the vessel just split off (phase 5.10): `index` is the segment; `value` is the
+/// vessel's id as a `Real`. In ascending segment order, right after their [`EVENT_SPLIT`].
+pub const EVENT_VESSEL_SEGMENT: u32 = 7;
 
 /// One event. `index` is a world index (a beam for yield and break, a node for freeze), never a
 /// packed one.

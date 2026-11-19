@@ -21,7 +21,7 @@ import { ABI_VERSION, type ApplyResult } from './core.ts';
 import { World } from './world.ts';
 
 export const FORMAT_VERSION = 1;
-/** The oldest core ABI whose recordings still replay (2: before the terrain commands; 3 to 9 also read). */
+/** The oldest core ABI whose recordings still replay (2: before the terrain commands; 3 to 10 also read). */
 export const MIN_READABLE_ABI = 2;
 const MAGIC = [0x52, 0x43, 0x52, 0x44]; // "RCRD"
 const HEADER_BYTES = 40;
@@ -230,7 +230,10 @@ export function decodeRecording(bytes: Uint8Array): Recording {
   // bodies, the joints) and, for the last four, hash sections that exist only once a thruster,
   // segment, body or joint does, so every older list means the same thing in them. ABI 8 added
   // only the stress estimate's readers, which no command or hash touches. ABI 9 added the
-  // sleeping command (kind 17) and a hash section that exists only once it has run.
+  // sleeping command (kind 17) and a hash section that exists only once it has run. ABI 10 added
+  // the break command (kind 18), two event kinds and a hash section that exists only once a split
+  // has happened. An older list still means the same commands; only its end hash can move, and only
+  // where a beam broke in a world with segments (the rigid hop, re-recorded on purpose in 5.10).
   if (abi < MIN_READABLE_ABI || abi > ABI_VERSION) {
     throw new Error(`recorded with core ABI ${abi}, this build reads ABI ${MIN_READABLE_ABI} to ${ABI_VERSION}`);
   }

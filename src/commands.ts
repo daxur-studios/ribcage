@@ -29,6 +29,8 @@ export const CMD_ADD_JOINT = 15;
 export const CMD_SET_JOINT_TARGET = 16;
 /** Switches sleeping on or off (plan 005, phase 5.8). See `CommandBatch.setSleeping`. */
 export const CMD_SET_SLEEPING = 17;
+/** Breaks a beam as if it had snapped (plan 005, phase 5.10). See `CommandBatch.breakBeam`. */
+export const CMD_BREAK_BEAM = 18;
 /** Joint drive modes (`joint::JOINT_FREE`, `JOINT_SERVO`, `JOINT_ROTOR`). */
 export const JOINT_FREE = 0;
 export const JOINT_SERVO = 1;
@@ -229,6 +231,15 @@ export class CommandBatch {
    */
   setSleeping(on: boolean): number {
     return this.#push(CMD_SET_SLEEPING, on ? 1 : 0, 0, []);
+  }
+
+  /**
+   * Breaks a beam as if it had snapped (plan 005, phase 5.10): it stays in its slot, flagged
+   * broken, and carries nothing. The coming step checks whether the structure fell into separate
+   * vessels. Rejected for a beam that is not live or is already broken. No break event.
+   */
+  breakBeam(beam: number): number {
+    return this.#push(CMD_BREAK_BEAM, beam, 0, []);
   }
 
   /** The whole height array as records of six (the last may be shorter), in index order. */

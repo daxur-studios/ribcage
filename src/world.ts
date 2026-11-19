@@ -6,7 +6,7 @@
  * in the page.
  */
 
-import type { ApplyResult, BeamView, BodyView, CoreEvent, EstimateView, HostPtr, JointView, SegmentProps, SegmentView, SleepView } from './core.ts';
+import type { ApplyResult, BeamView, BodyView, CoreEvent, EstimateView, HostPtr, JointView, SegmentProps, SegmentView, SleepView, VesselProps, VesselView } from './core.ts';
 import { Core } from './core.ts';
 import type { CommandBatch } from './commands.ts';
 
@@ -83,6 +83,16 @@ export class World {
   /** The sleep state after the last step (phase 5.8; empty before sleeping ran). */
   sleep(): SleepView {
     return this.#core.sleep(this.#h);
+  }
+
+  /** Vessels now (phase 5.10; every node in vessel 0 before the first split). */
+  vessels(): VesselView {
+    return this.#core.vessels(this.#h);
+  }
+
+  /** One vessel's mass, momentum and angular momentum about the origin now. */
+  vesselProps(vessel: number): VesselProps {
+    return this.#core.vesselProps(this.#h, vessel);
   }
 
   /** One segment's mass, centre and inertia from the current positions, or `null`. */

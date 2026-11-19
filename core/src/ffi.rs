@@ -35,10 +35,12 @@ use crate::world::{BeamSpec, World};
 /// once a joint exists). 8 added the stress estimate's switch and readers (`rc_set_estimate`,
 /// `rc_est_*`), which touch neither hash nor any command. 9 added sleeping (command kind 17,
 /// `CMD_SET_SLEEPING`, the wake and sleep events, kinds 4 and 5) and its readers (`rc_sleep_*`),
-/// and puts the sleep state in the state hash (only once the command has run). Nothing else
-/// changed, so a recording made at ABI 2 to 8 still means the same thing and replays
-/// (`src/recording.ts`).
-pub const ABI_VERSION: u32 = 9;
+/// and puts the sleep state in the state hash (only once the command has run). 10 added splitting
+/// into vessels (command kind 18, `CMD_BREAK_BEAM`, the split and vessel-segment events, kinds 6
+/// and 7) and its readers (`rc_vessel_*`), and puts each node's vessel in the state hash (only
+/// once a split has happened). Nothing else changed, so a recording made at ABI 2 to 9 still
+/// means the same thing and replays (`src/recording.ts`).
+pub const ABI_VERSION: u32 = 10;
 
 /// Bytes per command record, for the host to check against its own layout.
 #[no_mangle]
@@ -61,6 +63,10 @@ pub struct Host {
     load_nodes: Vec<u32>,
     /// One segment's mass, centre and inertia, filled by [`rc_segment_props`].
     segment_props: Vec<Real>,
+    /// Vessel per node slot or per segment, filled by [`rc_vessel_nodes`] and [`rc_vessel_segments`].
+    vessel_ids: Vec<u32>,
+    /// One vessel's mass, momentum and angular momentum, filled by [`rc_vessel_props`].
+    vessel_props: Vec<Real>,
 }
 
 impl Host {
@@ -74,6 +80,8 @@ impl Host {
             beam_ratio: Vec::new(),
             load_nodes,
             segment_props: Vec::new(),
+            vessel_ids: Vec::new(),
+            vessel_props: Vec::new(),
         }
     }
 
@@ -737,4 +745,81 @@ pub unsafe extern "C" fn rc_sleep_check_count(h: *const Host) -> u32 {
 #[no_mangle]
 pub unsafe extern "C" fn rc_sleep_checks_ptr(h: *const Host) -> *const Real {
     (*h).world.sleep.checks.as_ptr() as *const Real
+}
+
+/// Vessel ids handed out so far (phase 5.10): one more than the highest, 1 before the first split.
+///
+/// # Safety
+/// `h` is a live host pointer.
+#[no_mangle]
+pub unsafe extern "C" fn rc_vessel_ids(h: *const Host) -> u32 {
+    (*h).world.vessel_ids()
+}
+
+/// Per node slot: its vessel, one `u32` (`u32::MAX` for a dead slot or a node added since the
+/// last check). As many as `rc_node_count`.
+///
+/// # Safety
+/// `h` is a live host pointer.
+#[no_mangle]
+pub unsafe extern "C" fn rc_vessel_nodes(h: *mut Host) -> *const u32 {
+    let host = &mut *h;
+    let n = host.world.node_count();
+    host.vessel_ids.clear();
+    for i in 0..n {
+        let v = host.world.node_vessel(i);
+        host.vessel_ids.push(v);
+    }
+    host.vessel_ids.as_ptr()
+}
+
+/// Per segment: its vessel, one `u32` (`u32::MAX` for a segment with no live node). As many as
+/// `rc_segment_count`.
+///
+/// # Safety
+/// `h` is a live host pointer.
+#[no_mangle]
+pub unsafe extern "C" fn rc_vessel_segments(h: *mut Host) -> *const u32 {
+    let host = &mut *h;
+    let n = host.world.segment_count();
+    host.vessel_ids.clear();
+    for s in 0..n {
+        let v = host.world.segment_vessel(s);
+        host.vessel_ids.push(v);
+    }
+    host.vessel_ids.as_ptr()
+}
+
+/// One vessel now, seven `Real`: mass (its segments' stored masses plus its massive nodes with no
+/// segment), momentum, then angular momentum about the origin (riders move with their body).
+///
+/// # Safety
+/// `h` is a live host pointer.
+#[no_mangle]
+pub unsafe extern "C" fn rc_vessel_props(h: *mut Host, vessel: u32) -> *const Real {
+    let host = &mut *h;
+    let (p, l) = host.world.vessel_momentum(vessel);
+    let m = host.world.vessel_mass(vessel);
+    host.vessel_props.clear();
+    host.vessel_props.extend_from_slice(&[m, p.x, p.y, p.z, l.x, l.y, l.z]);
+    host.vessel_props.as_ptr()
+}
+
+/// Body divisions in the last step: 0 or 1.
+///
+/// # Safety
+/// `h` is a live host pointer.
+#[no_mangle]
+pub unsafe extern "C" fn rc_vessel_check_count(h: *const Host) -> u32 {
+    (*h).world.vessel.checks.len() as u32
+}
+
+/// The last step's body division, 15 `Real` (as `rc_sleep_checks_ptr`, kind 3): totals before
+/// and after.
+///
+/// # Safety
+/// `h` is a live host pointer.
+#[no_mangle]
+pub unsafe extern "C" fn rc_vessel_checks_ptr(h: *const Host) -> *const Real {
+    (*h).world.vessel.checks.as_ptr() as *const Real
 }

@@ -483,3 +483,52 @@ Off/on, substeps and ms per step:
 - **[finding]** The root of the wreck chatter: the substep count is per island and set by its stiffest live beam, and it changes when segments join or leave a body. A live segment's settled sag depends on that count, so every switch jolts its live neighbours. A per-segment (or per-live-part) count, or holding the count across a switch, would let damaged and partly loaded craft sleep. That matters for 5.11's tall rocket, which will be partly asleep most of the time.
 - **[oracle-candidate]** Can the substep count of a mixed rigid/live island be held, or chosen per live part, without breaking determinism or the 4.8 bands? This would let switches stop changing the live segments' settled shape.
 - 5.10 splits a body cut by a break. The crash rule (wake the whole craft over seams, broken or not) means a split always happens awake in the hopper scenes, so test a split of a sleeping body directly.
+
+## 2026-11-19 (phase 5.10: splitting into vessels)
+
+Built `core/src/vessel.rs`: after the solve, on a step with a break event or a structural command, a union-find over live nodes finds the connected pieces; more than one piece makes vessels. ABI 9 → 10 (`CMD_BREAK_BEAM` = 18, `EVENT_SPLIT` = 6, `EVENT_VESSEL_SEGMENT` = 7, readers `rc_vessel_*`), mirrored in `src/core.ts`, `src/world.ts` and `src/commands.ts`; the decoder still reads ABI 2 onward.
+
+### Decisions
+
+- **[decision]** Pieces are joined by unbroken beams and live joints only. A body does not join anything by itself, because a rider's beams stay alive, so sleeping can never change what is connected. Segment membership does not join either. The first build did join every node to its segment, and then the hop never split: leg 0 is cut off inside its own segment (the crush bay), not at its seam.
+- **[decision]** A segment cut inside belongs to the vessel holding most of its node mass (summed in node order, ties to the lower id), so a leg torn off below its root is reported in the new vessel. The segment is marked torn, and a torn segment never sleeps, since one body over two loose pieces would move them together. A host's explicit `CMD_MAKE_RIGID` on a torn segment is not refused (see Not checked).
+- **[decision]** Identity: each piece belongs to the lowest old vessel id among its nodes. Of one vessel's pieces, the one holding its lowest node keeps the id; the others get new ids in piece order. Ids are never reused. Nodes added after a split have no vessel until the next check. A new beam between two vessels merges them at the next check, and the lower id is kept. Commanded breaks and deletes set a pending check; adds do not, so a merge waits for the next cut.
+- **[decision]** Nothing runs in a world without segments, and nothing enters the state hash until the first split. So the all-live goldens and the pre-sleep recordings are untouched. The cost: two crafts that never touched share vessel 0 until the first check finds them apart. Craft against craft is milestone 8.
+- **[decision]** A body whose segments now lie in more than one vessel is divided with the wake formulas. The segments away from the vessel of the body's lowest segment are released, and each other vessel's share is made rigid again from those exact velocities. Asleep shares settle again (`SETTLE_STEPS`). Each step that divides records one `SwitchCheck` of kind 3.
+- **[decision]** Crash-wake and throttle-wake after a split: both stop at a vessel boundary, and so does the neighbour wake. "The whole craft" now means the whole vessel: `sleep_spread_craft` and `sleep_spread` only cross seams whose two segments are in one vessel. A torn-off leg lying on the ground is not woken by the craft's engine.
+- **[decision]** The stress estimate is per vessel. In the leaves-to-root pass, a child segment's load is added into its parent only when they are in one vessel.
+- **[decision]** A commanded break (`CMD_BREAK_BEAM`) emits no break event. The host knows it asked; the split event still comes.
+- **[decision]** Vessel mass is the sum of the vessel's live node masses in node order, not the stored segment masses, because a torn segment's mass has to be divided. With the hopper's fractional node masses, the vessels add to 4600 kg within 1 to 3 ulp (9.1e-13 and 2.7e-12 kg measured), not bit-exactly as the plan asked. Exact sums would need masses stored at the split, which would drift with adds and deletes. The tests hold the sum to 1e-12 relative.
+- **[decision]** Goldens re-recorded on purpose:
+  - `hard-landing-rigid.rcrd` (106940 bytes, ABI 10): the rigid hop hash moves from 0xa08c8113b3a581c7 to **0x8e49fe2d420d03e2**;
+  - the estimate tests' rigid hop with sleeping off: 0x5a1c383b76d89ea6 → **0xc5612d988a0ccf1f**. Here only the vessel ids enter the state hash: the physics hash matches the last commit's build at every step checked through 1320.
+  With sleeping on, the physics matches until step 640, where the torn-off leg piece (segment 6) used to fall asleep and now stays live. By the end the median node is 9 mm from the old run; the largest moves are loose leg nodes, up to 0.89 m. Unchanged: the all-live hop 0xd92f2aad01c0e048, `SLEEP_SCENE_200` 0x5b2faa52304df2bb, the pre-sleep recordings, and `test/equivalence.test.ts`, which passes as it stands.
+
+### Measured
+
+| Case | Result |
+| --- | --- |
+| Sleep scene cut live (native) | vessels 80 + 20 kg, exactly 100; cube keeps vessel 0 |
+| Sleep scene cut asleep (native) | body divided in two; \|dp\| 1.1e-13 N·s, \|dL\| 3.2e-13 N·m·s, dE +3.6e-12 J |
+| Three rigid cubes, cut between 2 and 3 | 160 + 80 kg; lower two still one body, top cube its own; momentum change over the step is gravity to 1e-9 |
+| Hopper leg 0 cut in the air, live | 4478.563 + 121.437 kg (sum +9.1e-13); momentum off gravity's impulse by 1.9e-9 N·s |
+| The same cut asleep (step 100 of a 20 m/s drop) | \|dp\| 3.3e-24 N·s, \|dL\| 9.6e-13 N·m·s, dE 0 J; leg on body 6, craft on body 0 |
+| Rigid hop, sleeping on and off | split at step 275, leg 0 is vessel 1 (88.8 kg torn piece, the craft 4511.2 kg); matches the beam walk (legs joined 0111) |
+| 7 m/s drops, rigid | rough-a, rough-b (leg 1), rough-d (leg 0) split at step 55 to 56; the pad, rough-c and rough-e keep every leg |
+| Cut scene golden | `VESSEL_SCENE_200` 0x2235baa7f88d26ad, native and wasm |
+
+Suites: `cargo test` 144 passed, `pnpm test` 251 passed, `pnpm typecheck` clean.
+
+### Not checked
+
+- **[assumption]** The all-live flight (`rigid: false`) sends no segment commands, so it never checks for a split and its hop reports one vessel. The core needs segments to split; a craft without them is one vessel by construction.
+- **[assumption]** A host that makes a torn segment rigid by command gets one body over two pieces. Nothing in the repo does this.
+- Not run on the page. No demo (skip by plan).
+- A split into three or more vessels in one step is covered by the code path (piece order, new ids in sequence) but no test cuts three ways at once.
+
+### For 5.11 to 5.13
+
+- 5.11 (the tall rocket): stages separating are a split. A decoupler should be a beam set that `CMD_BREAK_BEAM` cuts; the upper stage keeps vessel 0 only if it holds the lowest node, so number the craft from the payload down if the payload should keep the identity.
+- 5.12 (the page): read `rc_vessel_nodes` and colour or label by vessel; the split event gives the step and the segments for a "stage separated" or "leg lost" notice.
+- 5.13: the torn-segment rule keeps a broken leg live forever. With many wrecks lying about that costs substeps; a later phase could re-segment a torn segment into its pieces so each can sleep.
+- **[oracle-candidate]** Is "majority of mass" the right owner for a segment cut inside, or should a cut segment be split into new segments at the cut, so that each piece can sleep and carry its own estimate?

@@ -19,6 +19,8 @@ const BODY_SCENE_61 = 0x06024ffac786af7bn;
 const BODY_SCENE_120 = 0x722722cfee9354f3n;
 /** The body scene with sleeping on and the thrust cut before step 150, after 200 steps (core/tests/sleep.rs). */
 const SLEEP_SCENE_200 = 0x5b2faa52304df2bbn;
+/** The same scene with the seam beam cut before step 120, asleep, after 200 steps (core/tests/vessel.rs). */
+const VESSEL_SCENE_200 = 0x2235baa7f88d26adn;
 /** End hash of the reported scene after 720 steps at the default rule (`cargo run --release -p beam-core --example bench`). */
 const STANDARD_BENCH_720 = 0x871092299f3cea56n;
 
@@ -223,6 +225,47 @@ test("sleeping two segments into one body gives the native hash", async () => {
   }
   assert.deepEqual([...core.sleep(h).asleep], [0, 0], "awake after the cut");
   assert.equal(core.stateHash(h), SLEEP_SCENE_200);
+  core.hostFree(h);
+});
+
+test("cutting the sleeping scene in two gives two vessels and the native hash", async () => {
+  const core = await Core.load(loadBytes());
+  const h = core.hostNew();
+  const setup = new CommandBatch();
+  const spec = (rest: number) => ({ rest, compliance: 1e-5, damping: 20, yieldStrain: 5, breakStrain: 10 });
+  for (let k = 0; k < 8; k++) {
+    setup.addNode(k & 1 ? 0.5 : -0.5, k & 2 ? 50.5 : 49.5, k & 4 ? 0.5 : -0.5, 0.1, 0.1);
+  }
+  for (const [x, y, z] of [[2, 50, 0], [3, 50, 0], [2.5, 50, 0.8660254037844386], [2.5, 50.816496580927726, 0.28867513459481287]] as const) {
+    setup.addNode(x, y, z, 0.2, 0.1);
+  }
+  for (let i = 0; i < 8; i++) {
+    for (const bit of [1, 2, 4]) if ((i & bit) === 0) setup.addBeam(i, i | bit, spec(1));
+  }
+  for (const [a, b] of [[8, 9], [8, 10], [8, 11], [9, 10], [9, 11], [10, 11]] as const) setup.addBeam(a, b, spec(1));
+  setup.addBeam(1, 8, spec(1.5));
+  setup.addSegment(NO_SEGMENT, 0, 0, 0);
+  setup.addSegment(0, 0, 0.01, 1e-5);
+  for (let n = 0; n < 12; n++) setup.setNodeSegment(n, n < 8 ? 0 : 1);
+  setup.addThruster(0, 1, 300);
+  setup.setThrottle(0, 1);
+  setup.setSleeping(true);
+  assert.equal(core.applyCommands(h, setup).rejected, 0);
+  for (let s = 0; s < 200; s++) {
+    if (s === 120) {
+      const cut = new CommandBatch();
+      cut.breakBeam(18);
+      assert.equal(core.applyCommands(h, cut).rejected, 0);
+    }
+    core.step(h);
+    if (s === 120) {
+      const v = core.vessels(h);
+      assert.equal(v.ids, 2);
+      assert.deepEqual([...v.segmentVessel], [0, 1]);
+      assert.equal(v.checks.length, 1, "the body was divided");
+    }
+  }
+  assert.equal(core.stateHash(h), VESSEL_SCENE_200);
   core.hostFree(h);
 });
 

@@ -63,7 +63,6 @@ pub const CMD_MAKE_RIGID: u32 = 13;
 /// exist or is not rigid. Result: 1.
 pub const CMD_RELEASE_RIGID: u32 = 14;
 
-/// Result slot value for a rejected record.
 /// Adds a joint (plan 005, phase 5.5; see [`crate::joint`]): `a` = side A's first axis node,
 /// `b` = side B's first axis node; `f[0]` = A's second axis node, `f[1]` = B's second axis node,
 /// `f[2]` = A's reference node, `f[3]` = B's reference node, each a whole number from 0 to
@@ -82,6 +81,12 @@ pub const CMD_SET_JOINT_TARGET: u32 = 16;
 /// (anything else rejects the record). On also switches the stress estimate on, which it reads.
 /// Off wakes every segment it put to sleep at the start of the next step. Result: 1.
 pub const CMD_SET_SLEEPING: u32 = 17;
+/// Breaks a beam as if it had snapped (plan 005, phase 5.10): `a` = beam. It stays in its slot,
+/// flagged broken, and carries nothing; the coming step checks whether the structure fell into
+/// separate vessels ([`crate::vessel`]). Rejected, and nothing changed, when the beam is not live or
+/// is already broken. No break event: events are what a step did. Result: 1.
+pub const CMD_BREAK_BEAM: u32 = 18;
+/// Result slot value for a rejected record.
 pub const REJECTED: u32 = u32::MAX;
 
 /// One command record. `repr(C)`; the TypeScript host writes it field by field (`src/commands.ts`).
@@ -281,6 +286,16 @@ fn apply_one(w: &mut World, c: &Command) -> u32 {
                 return REJECTED;
             }
             w.set_sleeping(c.a == 1);
+            1
+        }
+        CMD_BREAK_BEAM => {
+            if c.a >= w.beam_count() || !w.beam_alive(c.a) {
+                return REJECTED;
+            }
+            let k = c.a as usize;
+            w.beam_flags[k] |= crate::world::BEAM_BROKEN;
+            w.last_lambda[k] = 0.0;
+            w.vessel_structure_changed();
             1
         }
         _ => REJECTED,

@@ -154,6 +154,9 @@ pub struct World {
     /// Sleep and wake (phase 5.8): the switch and its per-segment state. Off by default; in the
     /// state hash once `CMD_SET_SLEEPING` has run.
     pub sleep: crate::sleep::Sleep,
+    /// Splitting into vessels (phase 5.10): which vessel each node and segment is in. In the state
+    /// hash once the first split happened.
+    pub vessel: crate::vessel::Vessel,
 }
 
 impl Default for World {
@@ -229,6 +232,7 @@ impl Default for World {
             seg_triggered: Vec::new(),
             est: crate::estimate::Estimate::default(),
             sleep: crate::sleep::Sleep::default(),
+            vessel: crate::vessel::Vessel::default(),
         }
     }
 }
@@ -385,6 +389,8 @@ impl World {
         self.node_flags[i as usize] = 0;
         self.node_gen[i as usize] = self.node_gen[i as usize].wrapping_add(1);
         self.body_node_left(i);
+        self.vessel_node_left(i);
+        self.vessel_structure_changed();
         self.release_node_segment(i);
         self.free_nodes.push(Reverse(i));
     }
@@ -395,6 +401,7 @@ impl World {
         }
         self.beam_flags[i as usize] = 0;
         self.beam_gen[i as usize] = self.beam_gen[i as usize].wrapping_add(1);
+        self.vessel_structure_changed();
         self.free_beams.push(Reverse(i));
     }
 

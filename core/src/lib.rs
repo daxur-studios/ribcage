@@ -20,6 +20,7 @@ pub mod sleep;
 pub mod solver;
 pub mod terrain;
 pub mod thrust;
+pub mod vessel;
 pub mod world;
 
 use real::Real;

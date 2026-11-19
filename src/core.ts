@@ -10,7 +10,7 @@
 import { COMMAND_BYTES, type CommandBatch } from './commands.ts';
 
 /** The ABI version this loader was written for (`ABI_VERSION` in core/src/ffi.rs). */
-export const ABI_VERSION = 9;
+export const ABI_VERSION = 10;
 
 /** A host pointer inside the core (an integer to JavaScript). */
 export type HostPtr = number;
@@ -90,6 +90,12 @@ interface Exports {
   rc_sleep_ratio_ptr(h: number): number;
   rc_sleep_check_count(h: number): number;
   rc_sleep_checks_ptr(h: number): number;
+  rc_vessel_ids(h: number): number;
+  rc_vessel_nodes(h: number): number;
+  rc_vessel_segments(h: number): number;
+  rc_vessel_props(h: number, vessel: number): number;
+  rc_vessel_check_count(h: number): number;
+  rc_vessel_checks_ptr(h: number): number;
 }
 
 /** Segments, seams and each node's segment, as copies (plan 005, phase 5.1). */
@@ -202,6 +208,16 @@ export const EVENT_FREEZE = 3;
 export const EVENT_WAKE = 4;
 /** A segment went to sleep (phase 5.8): `index` is the segment, `value` its last reading. */
 export const EVENT_SLEEP = 5;
+/**
+ * A new vessel split off (phase 5.10): `index` is its id, `value` the id it came from
+ * (`NO_VESSEL` for a piece made only of nodes added since the last check). Its segments follow
+ * as `EVENT_VESSEL_SEGMENT` records.
+ */
+export const EVENT_SPLIT = 6;
+/** One segment of the vessel just split off: `index` is the segment, `value` the vessel's id. */
+export const EVENT_VESSEL_SEGMENT = 7;
+/** No vessel: a dead node slot, a node added since the last check (`vessel::NO_VESSEL`). */
+export const NO_VESSEL = 0xffff_ffff;
 /** Wake reasons (`sleep::WAKE_*`). */
 export const WAKE_CONTACT = 1;
 export const WAKE_IMPACT = 2;
@@ -215,7 +231,7 @@ export const WAKE_FORCE = 8;
 
 /** One switch pass of the last step (`sleep::SwitchCheck`): totals before and after. */
 export interface SwitchCheck {
-  /** 1 a wake pass, 2 a sleep pass. */
+  /** 1 a wake pass, 2 a sleep pass, 3 a body division at a split (phase 5.10). */
   kind: number;
   momentumBefore: [number, number, number];
   spinBefore: [number, number, number];
@@ -223,6 +239,25 @@ export interface SwitchCheck {
   momentumAfter: [number, number, number];
   spinAfter: [number, number, number];
   energyAfter: number;
+}
+
+/** Vessels now, as copies (phase 5.10). Every node and segment is in vessel 0 before the first split. */
+export interface VesselView {
+  /** Ids handed out so far: one more than the highest. */
+  ids: number;
+  /** Vessel per node slot (`NO_VESSEL` for a dead slot). */
+  nodeVessel: Uint32Array;
+  /** Vessel per segment (`NO_VESSEL` for a segment with no live node). */
+  segmentVessel: Uint32Array;
+  /** The last step's body division (kind 3), if it divided any body. */
+  checks: SwitchCheck[];
+}
+
+/** One vessel now: mass in kg, momentum, and angular momentum about the origin. */
+export interface VesselProps {
+  mass: number;
+  momentum: [number, number, number];
+  spin: [number, number, number];
 }
 
 /** The sleep state after the last step, as copies (phase 5.8). Empty before sleeping ran. */
@@ -467,25 +502,32 @@ export class Core {
     const n = x.rc_sleep_segment_count(h);
     const k = x.rc_sleep_check_count(h);
     const mem = x.memory.buffer;
-    const raw = new Float64Array(mem, x.rc_sleep_checks_ptr(h), k * 15).slice();
-    const checks: SwitchCheck[] = [];
-    for (let i = 0; i < k; i++) {
-      const v = raw.subarray(i * 15, i * 15 + 15);
-      checks.push({
-        kind: v[0]!,
-        momentumBefore: [v[1]!, v[2]!, v[3]!],
-        spinBefore: [v[4]!, v[5]!, v[6]!],
-        energyBefore: v[7]!,
-        momentumAfter: [v[8]!, v[9]!, v[10]!],
-        spinAfter: [v[11]!, v[12]!, v[13]!],
-        energyAfter: v[14]!,
-      });
-    }
+    const checks = readChecks(new Float64Array(mem, x.rc_sleep_checks_ptr(h), k * 15).slice());
     return {
       asleep: new Uint32Array(mem, x.rc_sleep_asleep_ptr(h), n).slice(),
       ratio: new Float64Array(mem, x.rc_sleep_ratio_ptr(h), n).slice(),
       checks,
     };
+  }
+
+  /** Vessels now, as copies (phase 5.10). */
+  vessels(h: HostPtr): VesselView {
+    const x = this.#x;
+    const nodes = x.rc_node_count(h);
+    const segs = x.rc_segment_count(h);
+    // Each fill may grow memory: read the buffer after each call.
+    const nodeVessel = new Uint32Array(x.memory.buffer, x.rc_vessel_nodes(h), nodes).slice();
+    const segmentVessel = new Uint32Array(x.memory.buffer, x.rc_vessel_segments(h), segs).slice();
+    const k = x.rc_vessel_check_count(h);
+    const checks = readChecks(new Float64Array(x.memory.buffer, x.rc_vessel_checks_ptr(h), k * 15).slice());
+    return { ids: x.rc_vessel_ids(h), nodeVessel, segmentVessel, checks };
+  }
+
+  /** One vessel's mass, momentum and angular momentum about the origin now. */
+  vesselProps(h: HostPtr, vessel: number): VesselProps {
+    const ptr = this.#x.rc_vessel_props(h, vessel);
+    const v = new Float64Array(this.#x.memory.buffer, ptr, 7);
+    return { mass: v[0]!, momentum: [v[1]!, v[2]!, v[3]!], spin: [v[4]!, v[5]!, v[6]!] };
   }
 
   /** One segment's mass, centre and inertia now; `null` when it does not exist or has no mass. */
@@ -499,4 +541,22 @@ export class Core {
       inertia: [v[4]!, v[5]!, v[6]!, v[7]!, v[8]!, v[9]!],
     };
   }
+}
+
+/** Switch-check records, 15 numbers each (`sleep::SwitchCheck`). */
+function readChecks(raw: Float64Array): SwitchCheck[] {
+  const checks: SwitchCheck[] = [];
+  for (let i = 0; i + 15 <= raw.length; i += 15) {
+    const v = raw.subarray(i, i + 15);
+    checks.push({
+      kind: v[0]!,
+      momentumBefore: [v[1]!, v[2]!, v[3]!],
+      spinBefore: [v[4]!, v[5]!, v[6]!],
+      energyBefore: v[7]!,
+      momentumAfter: [v[8]!, v[9]!, v[10]!],
+      spinAfter: [v[11]!, v[12]!, v[13]!],
+      energyAfter: v[14]!,
+    });
+  }
+  return checks;
 }
