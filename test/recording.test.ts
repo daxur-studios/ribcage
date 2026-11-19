@@ -143,9 +143,9 @@ test("anything that is not exactly a recording is refused, with a reason", async
   assert.throws(() => decodeRecording(withByte(0, 0x58)), /first bytes/);
   assert.throws(() => decodeRecording(withByte(4, 9)), /format 9/);
   assert.throws(() => decodeRecording(withByte(8, 99)), /core ABI 99/);
-  assert.throws(() => decodeRecording(withByte(8, 1)), /core ABI 1, this build reads ABI 2 to 10/);
-  assert.throws(() => decodeRecording(withByte(8, 11)), /core ABI 11/);
-  // ABI 2 (before the terrain commands) and ABI 3 (before the thrusters) are still read; ABI 4 to 9 too; ABI 10 is the current one.
+  assert.throws(() => decodeRecording(withByte(8, 1)), /core ABI 1, this build reads ABI 2 to 11/);
+  assert.throws(() => decodeRecording(withByte(8, 12)), /core ABI 12/);
+  // ABI 2 (before the terrain commands) and ABI 3 (before the thrusters) are still read; ABI 4 to 10 too; ABI 11 is the current one.
   assert.equal(decodeRecording(withByte(8, 2)).steps, 10);
   assert.equal(decodeRecording(withByte(8, 3)).steps, 10);
   assert.equal(decodeRecording(withByte(8, 4)).steps, 10);
@@ -155,6 +155,7 @@ test("anything that is not exactly a recording is refused, with a reason", async
   assert.equal(decodeRecording(withByte(8, 8)).steps, 10);
   assert.equal(decodeRecording(withByte(8, 9)).steps, 10);
   assert.equal(decodeRecording(withByte(8, 10)).steps, 10);
+  assert.equal(decodeRecording(withByte(8, 11)).steps, 10);
   assert.throws(() => decodeRecording(withByte(12, 32)), /32-byte records/);
   assert.throws(() => decodeRecording(good.slice(0, good.byteLength - 1)), /truncated/);
   const extra = new Uint8Array(good.byteLength + 1);

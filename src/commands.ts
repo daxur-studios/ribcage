@@ -31,6 +31,8 @@ export const CMD_SET_JOINT_TARGET = 16;
 export const CMD_SET_SLEEPING = 17;
 /** Breaks a beam as if it had snapped (plan 005, phase 5.10). See `CommandBatch.breakBeam`. */
 export const CMD_BREAK_BEAM = 18;
+/** Sets the air: density, scale height, wind, speed of sound (plan 006, phase 6.1). See `CommandBatch.setAir`. */
+export const CMD_SET_AIR = 19;
 /** Joint drive modes (`joint::JOINT_FREE`, `JOINT_SERVO`, `JOINT_ROTOR`). */
 export const JOINT_FREE = 0;
 export const JOINT_SERVO = 1;
@@ -44,6 +46,8 @@ export const NO_BODY = 0xffff_ffff;
 export const BODY_ALIVE = 1;
 /** Segment flag: never simulated as a live lattice once rigid bodies exist (`segment::SEG_NEVER_LIVE`). */
 export const SEG_NEVER_LIVE = 1;
+/** Segment flag: the sleep module never puts it to sleep (`segment::SEG_NEVER_SLEEP`; a wing in flight). */
+export const SEG_NEVER_SLEEP = 2;
 
 /** Most grid points along one side of a terrain (`terrain::MAX_GRID`). */
 export const MAX_TERRAIN_GRID = 257;
@@ -240,6 +244,16 @@ export class CommandBatch {
    */
   breakBeam(beam: number): number {
     return this.#push(CMD_BREAK_BEAM, beam, 0, []);
+  }
+
+  /**
+   * Sets the air (plan 006, phase 6.1): sea-level density in kg/m^3 (default 1.225), scale height
+   * in metres (8500; 0 means constant density), wind velocity in m/s (zero) and speed of sound in
+   * m/s (340, above zero). Density at height y is `rho0 * exp(-y / H)`. Replaces the settings whole;
+   * a world that never sends it has no air entry in its hash.
+   */
+  setAir(rho0: number, scaleHeight: number, wind: readonly [number, number, number], soundSpeed: number): number {
+    return this.#push(CMD_SET_AIR, 0, 0, [rho0, scaleHeight, wind[0], wind[1], wind[2], soundSpeed]);
   }
 
   /** The whole height array as records of six (the last may be shorter), in index order. */

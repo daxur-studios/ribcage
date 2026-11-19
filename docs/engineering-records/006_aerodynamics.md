@@ -53,3 +53,7 @@ tags: [milestone-6, aerodynamics, wings, flutter, sleeping]
 
 - **[assumption]** The coefficients in the plan's formulas, the 50 Pa flight level, the aero-rate budget of 0.5 at 150 m/s, the wing's substep count staying at or under 19, the plane's size and cruise speed.
 - **[assumption]** Explicit per-step air is stable on live wings below the dive speed. 6.8 decides; it is the biggest risk of the milestone.
+
+## 2026-11-19 (phase 6.1)
+
+- **[action]** 6.1 done at ABI 11: `CMD_SET_AIR` (hashed only once run), own `exp` (within 1e-14 relative of the library over -30 to 10 and out to the saturation points), `World::add_env_force` with an `env_force` array cleared with `force`, the force-jump loop in `sleep_before_solve` reading `force - env_force` (no threshold changed), and `SEG_NEVER_SLEEP` honoured by the sleep candidate test. A steady 2x-weight load through the environment door does not wake a sleeping craft; the same load through `CMD_ADD_FORCE` does; a never-sleep segment stays live through 60 s that sleeps its neighbour. The unknown-flag test in `segment.rs` now uses bit 4. The rigid golden's stored file is compared with its ABI field patched, as for the first golden; neither golden was re-recorded and both replay to their hashes.

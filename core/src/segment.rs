@@ -31,8 +31,11 @@ pub const NO_SEGMENT: u32 = u32::MAX;
 
 /// Segment flag: never simulated as a live lattice once rigid bodies exist (engine, pod).
 pub const SEG_NEVER_LIVE: u32 = 1;
+/// Segment flag: the sleep module never puts it to sleep (plan 006, phase 6.1; a wing in flight).
+/// It may still be rigid by other means; this only keeps [`crate::sleep`] from choosing it.
+pub const SEG_NEVER_SLEEP: u32 = 2;
 /// Every flag bit a record may set. A record with any other bit is rejected.
-pub const SEG_FLAGS_KNOWN: u32 = SEG_NEVER_LIVE;
+pub const SEG_FLAGS_KNOWN: u32 = SEG_NEVER_LIVE | SEG_NEVER_SLEEP;
 
 /// Mass, centre and inertia of a segment, from the nodes' current positions.
 #[derive(Clone, Copy, Debug, PartialEq)]

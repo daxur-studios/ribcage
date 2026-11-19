@@ -41,7 +41,7 @@ pub const CMD_ADD_THRUSTER: u32 = 9;
 /// `a` = thruster; `f[0]` = throttle, a finite number from 0 to 1. Result: 1.
 pub const CMD_SET_THROTTLE: u32 = 10;
 /// Adds a segment (plan 005, phase 5.1): `a` = parent segment, or `u32::MAX` for none; `b` = flags
-/// (bit 0 is never-live, any other bit rejects the record); `f[0]` = axial area of the seam to the
+/// (bit 0 is never-live, bit 1 is never-sleep, any other bit rejects the record); `f[0]` = axial area of the seam to the
 /// parent in square metres, `f[1]` = its bending section, each finite and zero or more (checked for
 /// a root too, then not stored). A parent must already exist: a parent that does not (the new
 /// segment's own number is the cycle of length one) is rejected, so no cycle can form. Its stored
@@ -86,6 +86,11 @@ pub const CMD_SET_SLEEPING: u32 = 17;
 /// separate vessels ([`crate::vessel`]). Rejected, and nothing changed, when the beam is not live or
 /// is already broken. No break event: events are what a step did. Result: 1.
 pub const CMD_BREAK_BEAM: u32 = 18;
+/// Sets the air (plan 006, phase 6.1; see [`crate::aero`]): `f[0]` = sea-level density in kg/m³
+/// (finite, zero or more), `f[1]` = scale height in metres (finite, zero or more; zero means
+/// constant density), `f[2..5]` = wind velocity x, y, z in m/s (finite), `f[5]` = speed of sound in
+/// m/s (finite, above zero). The settings are replaced whole. Result: 1.
+pub const CMD_SET_AIR: u32 = 19;
 /// Result slot value for a rejected record.
 pub const REJECTED: u32 = u32::MAX;
 
@@ -296,6 +301,20 @@ fn apply_one(w: &mut World, c: &Command) -> u32 {
             w.beam_flags[k] |= crate::world::BEAM_BROKEN;
             w.last_lambda[k] = 0.0;
             w.vessel_structure_changed();
+            1
+        }
+        CMD_SET_AIR => {
+            let [rho0, height, wx, wy, wz, sound] = c.f;
+            if !finite(&c.f) || rho0 < 0.0 || height < 0.0 || sound <= 0.0 {
+                return REJECTED;
+            }
+            w.air = crate::aero::Air {
+                ever: true,
+                rho0,
+                scale_height: height,
+                wind: Vec3::new(wx, wy, wz),
+                sound_speed: sound,
+            };
             1
         }
         _ => REJECTED,

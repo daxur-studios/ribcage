@@ -88,7 +88,7 @@ fn bad_records_are_rejected_and_the_rest_of_the_batch_applies() {
         seg(5, 0, 1.0, 1.0),                  // 0: parent does not exist
         seg(2, 0, 1.0, 1.0),                  // 1: the new segment's own number (a cycle of one)
         seg(3, 0, 1.0, 1.0),                  // 2: a parent that comes later (a longer cycle)
-        seg(0, 2, 1.0, 1.0),                  // 3: unknown flag bit
+        seg(0, 4, 1.0, 1.0),                  // 3: unknown flag bit (bit 1 is never-sleep, valid since 6.1)
         seg(0, 0, n, 1.0),                    // 4: area is not a number
         seg(0, 0, 1.0, f64::INFINITY),        // 5: bending is infinite
         seg(0, 0, -1.0, 1.0),                 // 6: negative area

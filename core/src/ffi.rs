@@ -38,9 +38,11 @@ use crate::world::{BeamSpec, World};
 /// and puts the sleep state in the state hash (only once the command has run). 10 added splitting
 /// into vessels (command kind 18, `CMD_BREAK_BEAM`, the split and vessel-segment events, kinds 6
 /// and 7) and its readers (`rc_vessel_*`), and puts each node's vessel in the state hash (only
-/// once a split has happened). Nothing else changed, so a recording made at ABI 2 to 9 still
+/// once a split has happened). 11 added the air settings (command kind 19, `CMD_SET_AIR`) and the
+/// segment flag never-sleep (bit 1), and puts the air settings in both hashes (only once the
+/// command has run). Nothing else changed, so a recording made at ABI 2 to 10 still
 /// means the same thing and replays (`src/recording.ts`).
-pub const ABI_VERSION: u32 = 10;
+pub const ABI_VERSION: u32 = 11;
 
 /// Bytes per command record, for the host to check against its own layout.
 #[no_mangle]

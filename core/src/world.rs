@@ -53,6 +53,9 @@ pub struct World {
     pub inv_mass: Vec<Real>,
     pub radius: Vec<Real>,
     pub force: Vec<Vec3>,
+    /// The part of `force` that came through [`World::add_env_force`] (air, later water): same
+    /// step life as `force`, cleared with it. The force-jump wake reads `force - env_force`.
+    pub env_force: Vec<Vec3>,
     pub node_flags: Vec<u32>,
     pub node_gen: Vec<u32>,
     // Per beam.
@@ -157,6 +160,8 @@ pub struct World {
     /// Splitting into vessels (phase 5.10): which vessel each node and segment is in. In the state
     /// hash once the first split happened.
     pub vessel: crate::vessel::Vessel,
+    /// The air (phase 6.1): settings and density. In the state hash once `CMD_SET_AIR` has run.
+    pub air: crate::aero::Air,
 }
 
 impl Default for World {
@@ -167,6 +172,7 @@ impl Default for World {
             inv_mass: Vec::new(),
             radius: Vec::new(),
             force: Vec::new(),
+            env_force: Vec::new(),
             node_flags: Vec::new(),
             node_gen: Vec::new(),
             beam_a: Vec::new(),
@@ -233,6 +239,7 @@ impl Default for World {
             est: crate::estimate::Estimate::default(),
             sleep: crate::sleep::Sleep::default(),
             vessel: crate::vessel::Vessel::default(),
+            air: crate::aero::Air::default(),
         }
     }
 }
@@ -280,6 +287,7 @@ impl World {
             self.inv_mass[u] = inv_mass;
             self.radius[u] = radius;
             self.force[u] = Vec3::ZERO;
+            self.env_force[u] = Vec3::ZERO;
             self.node_flags[u] = flags;
             // `delete_node` already released the old segment; the slot starts with none.
             self.node_segment[u] = crate::segment::NO_SEGMENT;
@@ -295,6 +303,7 @@ impl World {
             self.inv_mass.push(inv_mass);
             self.radius.push(radius);
             self.force.push(Vec3::ZERO);
+            self.env_force.push(Vec3::ZERO);
             self.node_flags.push(flags);
             self.node_gen.push(0);
             self.node_segment.push(crate::segment::NO_SEGMENT);
@@ -438,5 +447,15 @@ impl World {
     pub fn add_force(&mut self, node: u32, f: Vec3) {
         let u = node as usize;
         self.force[u] = self.force[u] + f;
+    }
+
+    /// The same door for forces that come from the environment, not the host (air now, water
+    /// later). Adds to `force`, so the solver and the stress estimate see it like any other force,
+    /// and to `env_force`, so the force-jump wake can tell it apart: air is steady news the
+    /// estimate already reads, never a push (plan 006, "The environment-force channel").
+    pub fn add_env_force(&mut self, node: u32, f: Vec3) {
+        let u = node as usize;
+        self.force[u] = self.force[u] + f;
+        self.env_force[u] = self.env_force[u] + f;
     }
 }

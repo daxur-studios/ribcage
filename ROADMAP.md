@@ -96,7 +96,7 @@ Planning has two stages. The costly-to-redo milestones (5 and 8) have an early d
 - [x] Touching rigid segments merge into one body, and a tall rocket visibly wobbles less than with everything live. (Headless numbers: a 15 m, 7000 kg rocket on a clamp becomes one body from step 180; its tip moves 0.48 against 2.08 mm standing and 0.32 against 4.26 mm under full thrust; `test/tall-rocket.test.ts`, ER 005, phase 5.11. Seen on the page in 5.12: the rocket sits on the clamp with every segment asleep as one body, and a knock wakes the whole craft; the page tests are `test/segment-view.test.ts` and `test/browser.test.ts`.)
 - [x] A craft cut in two becomes two vessels with the correct total mass. (Headless: a hopper leg cut off in the air becomes vessel 1, the masses add to 4600 kg within 3 ulp and the momentum changes only by gravity; cut asleep, the body is divided keeping momentum and spin to 1e-12 with no energy added; the hard landing reports the leg it tears off as its own vessel (`test/vessel.test.ts`, `core/tests/vessel.rs`, ER 005, phase 5.10).)
 
-### 6. Aerodynamics
+### 6. Aerodynamics ([Plan 006](docs/plans/006_aerodynamics.md))
 
 - [ ] Parts declare aero elements (wing strips, body stations, plates) tied to nodes; anything undeclared gets an automatic body station, so legs and struts always get drag.
 - [ ] Lift and drag act per element (strips with stall, stations with crossflow and body lift), and a simple plane flies and can be steered.

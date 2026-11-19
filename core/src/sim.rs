@@ -124,6 +124,9 @@ fn step_inner(world: &mut World, choice: Choice) -> StepStats {
     for f in world.force.iter_mut() {
         *f = Vec3::ZERO;
     }
+    for f in world.env_force.iter_mut() {
+        *f = Vec3::ZERO;
+    }
     world.step_count += 1;
     stats
 }
@@ -359,6 +362,15 @@ fn physics_hash_state(world: &World) -> u64 {
             mix_real(&mut h, world.joint_cap[j]);
             mix_real(&mut h, world.joint_zero[j]);
         }
+    }
+    // Air (plan 006, phase 6.1), only once `CMD_SET_AIR` has run: a world that never sent it
+    // hashes as before. Air pushes, so it is physics.
+    if world.air.ever {
+        let a = &world.air;
+        mix_real(&mut h, a.rho0);
+        mix_real(&mut h, a.scale_height);
+        mix_vec(&mut h, a.wind);
+        mix_real(&mut h, a.sound_speed);
     }
     h
 }

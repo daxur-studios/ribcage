@@ -51,7 +51,7 @@
 use crate::body::NO_BODY;
 use crate::event::{Event, EVENT_SLEEP, EVENT_WAKE};
 use crate::real::{Real, Vec3};
-use crate::segment::{NO_SEGMENT, SEG_NEVER_LIVE};
+use crate::segment::{NO_SEGMENT, SEG_NEVER_LIVE, SEG_NEVER_SLEEP};
 use crate::sim::gravity_at;
 use crate::world::{World, BEAM_ALIVE, BEAM_BROKEN, NODE_ALIVE, NODE_FROZEN};
 use crate::STEP_SECONDS;
@@ -200,13 +200,17 @@ impl World {
         sl.pushed.resize(self.pos.len(), Vec3::ZERO);
     }
 
-    /// Per segment: may this module put it to sleep? Not never-live, not rigid already, with
+    /// Per segment: may this module put it to sleep? Not never-live or never-sleep, not rigid already, with
     /// mass, no frozen or pinned node, no joint node (a joint's two sides must stay on two
     /// bodies, and a moving joint wakes it anyway), and not cut inside into two vessels (phase 5.10).
     pub fn sleep_eligible(&self) -> Vec<bool> {
         let segs = self.seg_parent.len();
         let mut ok: Vec<bool> = (0..segs)
-            .map(|s| self.seg_flags[s] & SEG_NEVER_LIVE == 0 && self.seg_body[s] == NO_BODY && !self.segment_torn(s as u32))
+            .map(|s| {
+                self.seg_flags[s] & (SEG_NEVER_LIVE | SEG_NEVER_SLEEP) == 0
+                    && self.seg_body[s] == NO_BODY
+                    && !self.segment_torn(s as u32)
+            })
             .collect();
         let mut mass = vec![false; segs];
         for i in 0..self.pos.len() {
@@ -532,9 +536,11 @@ impl World {
             self.sleep.throttle[t] = now;
         }
         // Applied forces (before thrust goes in, so only commands): a change bigger than the
-        // node's weight is news the estimate would see a step late, like a contact jump.
+        // node's weight is news the estimate would see a step late, like a contact jump. Host
+        // forces only: what came through `add_env_force` (air) is taken out, so the environment
+        // never trips this trigger (plan 006); the estimate reads it instead.
         for i in 0..self.pos.len() {
-            let now = self.force[i];
+            let now = self.force[i] - self.env_force[i];
             let s = self.node_segment[i];
             if s != NO_SEGMENT && self.inv_mass[i] > 0.0 && self.node_flags[i] & NODE_ALIVE != 0 {
                 let d = now - self.sleep.pushed[i];

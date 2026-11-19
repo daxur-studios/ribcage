@@ -2,6 +2,7 @@
 //! Built to WebAssembly for the game and natively for tests and benchmarks.
 //! Storage rules: docs/research/core-data-layout.md.
 
+pub mod aero;
 pub mod bench;
 pub mod body;
 pub mod command;

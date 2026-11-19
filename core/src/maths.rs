@@ -138,6 +138,45 @@ fn atan_unit(z: Real) -> Real {
     4.0 * (t * p)
 }
 
+/// ln 2 in two pieces (fdlibm `ln2_hi`, `ln2_lo`): the high piece has trailing zero bits, so
+/// `k · LN2_HI` is exact for `|k| < 2^11`.
+const LN2_HI: Real = 6.931_471_803_691_238_164_90e-1;
+const LN2_LO: Real = 1.908_214_929_270_587_700_02e-10;
+const INV_LN2: Real = 1.442_695_040_888_963_387_00;
+
+/// `e^x` (plan 006, phase 6.1, air density). Reduce `x = k ln 2 + r` with `|r| ≤ ln 2 / 2`
+/// (Cody-Waite, `ln 2` in two pieces), sum the Taylor series of `e^r` to degree 13 in Horner
+/// form (truncation below `1e-17`, relative), and scale by `2^k` built from its exponent bits.
+/// Only add, subtract, multiply and one cast, so the bits are the same natively and in
+/// WebAssembly. Relative error within a few ulps (`core/tests/maths.rs`). Saturates: above 709 it
+/// is infinity, below -708 it is zero (the range where `2^k` is a normal number); NaN in, NaN
+/// out. Air density needs only `-30 < x < 10`.
+pub fn exp(x: Real) -> Real {
+    if x.is_nan() {
+        return Real::NAN;
+    }
+    if x > 709.0 {
+        return Real::INFINITY;
+    }
+    if x < -708.0 {
+        return 0.0;
+    }
+    let t = x * INV_LN2;
+    let k = (t + if t < 0.0 { -0.5 } else { 0.5 }) as i64;
+    let kf = k as Real;
+    let r = (x - kf * LN2_HI) - kf * LN2_LO;
+    // 1 + r (1 + r/2 (1 + r/3 (... (1 + r/13))))
+    let mut p = 1.0 + r / 13.0;
+    let mut n = 12;
+    while n >= 1 {
+        p = 1.0 + (r / n as Real) * p;
+        n -= 1;
+    }
+    // 2^k from the exponent field (an f64 layout; `Real` is f64 until the alias changes).
+    let scale = Real::from_bits(((k + 1023) as u64) << 52);
+    p * scale
+}
+
 /// The angle of the point `(x, y)` from the positive x axis, in `(-π, π]` (phase 5.5, joint
 /// angles). Zero for the origin. Built from the half angle: with `r = √(x² + y²)`,
 /// `tan(θ/2) = y / (r + x) = (r − x) / y`; the first form is used for `x ≥ 0` (where
