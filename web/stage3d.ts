@@ -17,6 +17,8 @@ import {
   FloatType,
   HemisphereLight,
   InstancedMesh,
+  LineBasicMaterial,
+  LineSegments,
   Matrix4,
   Mesh,
   MeshStandardMaterial,
@@ -39,6 +41,13 @@ import { NODE_TEXTURE_WIDTH, nodeTextureRows, packNodeTexture, skinAttributes } 
 import { stressRgb, YIELDED_RGB } from '../src/stress-colour.ts';
 import type { Terrain } from '../src/terrain.ts';
 import type { Snapshot } from '../src/world.ts';
+
+/** Most boxes one outline layer draws (bodies, or vessels); more are not drawn. */
+const MAX_BOXES = 64;
+/** The 12 edges of a box, as pairs of corner numbers (bit 0 is x, bit 1 y, bit 2 z). */
+const BOX_EDGES: readonly (readonly [number, number])[] = [
+  [0, 1], [2, 3], [4, 5], [6, 7], [0, 2], [1, 3], [4, 6], [5, 7], [0, 4], [1, 5], [2, 6], [3, 7],
+];
 
 /** Radius of a drawn beam, metres. */
 export const BEAM_DRAW_RADIUS = 0.07;
@@ -67,6 +76,9 @@ export class Stage {
   showPanels = true;
   /** Beams coloured by stress (true) or all one grey. */
   stressColours = true;
+  /** Outline layers of the segment-state view: boxes round rigid bodies and round vessels. */
+  bodyLines: LineSegments | null = null;
+  vesselLines: LineSegments | null = null;
 
   readonly #place = newPlacement();
   readonly #m = new Matrix4();
@@ -213,8 +225,62 @@ export class Stage {
     this.scene.add(this.panelMesh);
   }
 
+  /** A line layer that holds up to `MAX_BOXES` boxes. */
+  #makeLines(rgb: number): LineSegments {
+    const g = new BufferGeometry();
+    g.setAttribute('position', new BufferAttribute(new Float32Array(MAX_BOXES * 24 * 3), 3));
+    g.setDrawRange(0, 0);
+    const l = new LineSegments(g, new LineBasicMaterial({ color: rgb }));
+    l.frustumCulled = false;
+    this.scene.add(l);
+    return l;
+  }
+
+  /**
+   * Draws boxes (`minx miny minz maxx maxy maxz` each) into a line layer, making it on first use;
+   * an empty list hides it. Returns the layer.
+   */
+  drawBoxes(layer: 'body' | 'vessel', boxes: Float32Array): void {
+    let l = layer === 'body' ? this.bodyLines : this.vesselLines;
+    if (!l) {
+      l = this.#makeLines(layer === 'body' ? 0xffffff : 0xffd24a);
+      if (layer === 'body') this.bodyLines = l;
+      else this.vesselLines = l;
+    }
+    const n = Math.min(MAX_BOXES, Math.floor(boxes.length / 6));
+    const a = l.geometry.getAttribute('position') as BufferAttribute;
+    const out = a.array as Float32Array;
+    let w = 0;
+    for (let k = 0; k < n; k++) {
+      for (const [c0, c1] of BOX_EDGES) {
+        for (const c of [c0, c1]) {
+          out[w++] = boxes[6 * k + (c & 1 ? 3 : 0)]!;
+          out[w++] = boxes[6 * k + 1 + (c & 2 ? 3 : 0)]!;
+          out[w++] = boxes[6 * k + 2 + (c & 4 ? 3 : 0)]!;
+        }
+      }
+    }
+    a.needsUpdate = true;
+    l.geometry.setDrawRange(0, n * 24);
+    l.visible = n > 0;
+  }
+
+  /** Hides both outline layers. */
+  hideBoxes(): void {
+    if (this.bodyLines) this.bodyLines.visible = false;
+    if (this.vesselLines) this.vesselLines.visible = false;
+  }
+
   /** Takes the craft's beams, nodes and panels off the stage (the ground stays). */
   clearCraft(): void {
+    for (const l of [this.bodyLines, this.vesselLines]) {
+      if (l) {
+        this.scene.remove(l);
+        l.geometry.dispose();
+      }
+    }
+    this.bodyLines = null;
+    this.vesselLines = null;
     this.#dispose(this.beamMesh);
     this.#dispose(this.nodeMesh);
     this.#dispose(this.panelMesh);
@@ -239,8 +305,12 @@ export class Stage {
     this.nodeTexture.needsUpdate = true;
   }
 
-  /** Copies a snapshot's beams and flags, with node positions `positions` (blended between steps), into the instance buffers. */
-  drawSnapshot(s: Snapshot, positions: Float32Array): void {
+  /**
+   * Copies a snapshot's beams and flags, with node positions `positions` (blended between steps),
+   * into the instance buffers. With `beamRgb` (three bytes per beam, `beamModeColours`) the beams
+   * take those colours instead of the stress ones, except a beam bent past yield, which stays its own colour.
+   */
+  drawSnapshot(s: Snapshot, positions: Float32Array, beamRgb: Uint8Array | null = null): void {
     const { beamMesh, nodeMesh } = this;
     if (!beamMesh || !nodeMesh) return;
     const { beams, nodeFlags } = s;
@@ -257,7 +327,16 @@ export class Stage {
       this.#q.set(place.qx, place.qy, place.qz, place.qw);
       this.#s.set(1, place.length, 1);
       beamMesh.setMatrixAt(i, this.#m.compose(this.#p, this.#q, this.#s));
-      const [r, g, b] = !this.stressColours ? PLAIN_RGB : f & BEAM_YIELDED ? YIELDED_RGB : stressRgb(beams.ratio[i]!);
+      const [r, g, b] =
+        beamRgb !== null
+          ? f & BEAM_YIELDED
+            ? YIELDED_RGB
+            : [beamRgb[3 * i]!, beamRgb[3 * i + 1]!, beamRgb[3 * i + 2]!]
+          : !this.stressColours
+            ? PLAIN_RGB
+            : f & BEAM_YIELDED
+              ? YIELDED_RGB
+              : stressRgb(beams.ratio[i]!);
       beamMesh.setColorAt(i, this.#c.setRGB(r / 255, g / 255, b / 255));
     }
     beamMesh.instanceMatrix.needsUpdate = true;

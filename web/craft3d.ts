@@ -13,7 +13,7 @@
  */
 
 import { CommandBatch } from '../src/commands.ts';
-import { Core, EVENT_BREAK, EVENT_YIELD } from '../src/core.ts';
+import { Core, EVENT_BREAK, EVENT_YIELD, type BodyView, type SegmentView, type VesselView } from '../src/core.ts';
 import {
   craftCentre,
   followStep,
@@ -35,13 +35,23 @@ import { prepareFlight } from '../src/flight.ts';
 import { clearance, HOP_STEPS, PAD, ROUGH_SPOTS, type Spot } from '../src/landing.ts';
 import type { LoadedCraft } from '../src/parts/craft-file.ts';
 import { lerpPositions } from '../src/render3d.ts';
+import {
+  beamModeColours,
+  bodyBoxes,
+  modeCounts,
+  rootVesselNodes,
+  segmentModes,
+  vesselBoxes,
+  vesselCount,
+  type SegmentMode,
+} from '../src/segment-view.ts';
 import { decodeRecording, encodeRecording, Player, Recorder, type Recording } from '../src/recording.ts';
 import type { Terrain } from '../src/terrain.ts';
 import { World, type Snapshot } from '../src/world.ts';
 import { createBuilder } from './assemble3d.ts';
 import { Stage } from './stage3d.ts';
 
-const MAX_STEPS_PER_FRAME = 8;
+let MAX_STEPS_PER_FRAME = 8;
 /** Seconds in which the follow camera closes half the gap to the craft. */
 const FOLLOW_HALF_LIFE = 0.3;
 /** Radius of a drawn node, metres. */
@@ -60,6 +70,12 @@ const statusEl = $('status');
 const readoutEl = $('readout');
 const flyBtn = $<HTMLButtonElement>('fly');
 const hopBtn = $<HTMLButtonElement>('hop');
+const rocketBtn = $<HTMLButtonElement>('rocket');
+const roverBtn = $<HTMLButtonElement>('rover');
+const sleepBox = $<HTMLInputElement>('sleep');
+const stateBox = $<HTMLInputElement>('state');
+const stateLegend = $('state-legend');
+const stressLegend = $('stress-legend');
 const dropBtns = [...document.querySelectorAll<HTMLButtonElement>('button.drop')];
 const spotSel = $<HTMLSelectElement>('spot');
 const partSel = $<HTMLSelectElement>('part');
@@ -127,6 +143,19 @@ interface Run {
   coreMs: number;
   coreMsMax: number;
   coreSteps: number;
+  /** Sleeping on or off now, or `null` for a replay (the recording decides). */
+  sleeping: boolean | null;
+  /** A change of the sleeping box, waiting to go out as a recorded `CMD_SET_SLEEPING` on the next step. */
+  sleepAsk: boolean | null;
+  /** What the core says about segments, bodies and vessels, as of the last step (see `refreshState`). */
+  seg: SegmentView | null;
+  modes: SegmentMode[];
+  bodies: BodyView | null;
+  vessels: VesselView | null;
+  /** The root vessel's nodes after a split (the follow camera keeps them), or `null` while it is one vessel. */
+  rootNodes: number[] | null;
+  vesselCount: number;
+  beamRgb: Uint8Array;
 }
 
 const stage = new Stage(canvas, new URLSearchParams(location.search).get('webgl') === '1');
@@ -139,6 +168,8 @@ let rendererName = '';
 /** The craft that Fly, Scripted hop and Drop use, as a craft file's text, and its file name. */
 let craftText = '';
 let craftName = 'hopper.craft.json';
+/** The tall rocket's craft file text. */
+let rocketText = '';
 let dropSpeed = 7;
 /** What the last started scenario was, for Restart. */
 let lastStart: { kind: ScenarioKind; until: number } = { kind: 'fly', until: -1 };
@@ -161,7 +192,7 @@ function showBuild(text: string | null, keepView: boolean): string | null {
   }
   let flight;
   try {
-    flight = prepareFlight(text);
+    flight = prepareFlight(text, undefined, { sleeping: sleepBox.checked });
   } catch (e) {
     return `Could not draw the craft: ${e instanceof Error ? e.message : String(e)}`;
   }
@@ -198,15 +229,36 @@ function drawRun(r: Run): void {
     lerpPositions(r.prev, r.snap.positions, r.alpha, r.drawn);
     positions = r.drawn;
   }
-  stage.drawSnapshot(r.snap, positions);
+  const state = stateBox.checked && r.seg !== null;
+  stage.drawSnapshot(r.snap, positions, state ? r.beamRgb : null);
   stage.drawPanels(positions);
+  if (state && r.bodies && r.vessels) {
+    stage.drawBoxes('body', bodyBoxes(r.bodies, positions).boxes);
+    stage.drawBoxes('vessel', vesselBoxes(r.vessels, positions).boxes);
+  } else stage.hideBoxes();
+}
+
+/**
+ * Reads what the core knows about segments, bodies and vessels once per frame (copies; the core's
+ * step does not see this): the modes and beam colours for the segment-state view, the root vessel
+ * for the follow camera, and the counts the status line prints. Costs a few array copies.
+ */
+function refreshState(r: Run): void {
+  if (r.scenario.flight.segmentOf === null) return;
+  r.seg ??= r.world.segments();
+  r.modes = segmentModes(r.seg, r.world.sleep());
+  r.bodies = r.world.bodies();
+  r.vessels = r.world.vessels();
+  r.vesselCount = vesselCount(r.vessels);
+  r.rootNodes = rootVesselNodes(r.vessels);
+  if (stateBox.checked) beamModeColours(r.snap.beams.ends, r.seg.nodeSegment, r.modes, r.beamRgb);
 }
 
 /** Where the camera starts: back and up from the craft, looking at it. */
 function resetView(): void {
   if (!run) return;
   const c = craftCentre(run.craft, run.snap.positions);
-  const o: [number, number, number] = run.kind === 'part' ? [5, 3, 7] : [10, 5, 13];
+  const o: [number, number, number] = run.kind === 'part' ? [5, 3, 7] : run.kind === 'rocket' ? [20, 8, 26] : run.kind === 'rover' ? [5, 2, 7] : [10, 5, 13];
   stage.setView([c[0] + o[0], c[1] + o[1], c[2] + o[2]], c);
 }
 
@@ -214,7 +266,7 @@ function resetView(): void {
 function followCraft(r: Run, dt: number): void {
   if (!followBox.checked) return;
   const positions = r.playing && r.alpha < 1 ? r.drawn : r.snap.positions;
-  const c = craftCentre(r.craft, positions);
+  const c = craftCentre(r.craft, positions, r.rootNodes);
   const t = controls.target;
   const next = followStep([t.x, t.y, t.z], c, dt, FOLLOW_HALF_LIFE);
   camera.position.x += next[0] - t.x;
@@ -274,8 +326,18 @@ function openRun(world: World, kind: ScenarioKind, scenario: Scenario, recorder:
     coreMs: 0,
     coreMsMax: 0,
     coreSteps: 0,
+    sleeping: player ? null : sleepBox.checked,
+    sleepAsk: null,
+    seg: null,
+    modes: [],
+    bodies: null,
+    vessels: null,
+    rootNodes: null,
+    vesselCount: 1,
+    beamRgb: new Uint8Array(snap.beams.flags.length * 3),
   };
   message = '';
+  refreshState(run);
   drawRun(run);
   resetView();
   syncButtons();
@@ -290,7 +352,7 @@ function currentSpot(): Spot {
 function startScenario(kind: ScenarioKind, until = -1): void {
   let scenario: Scenario;
   try {
-    scenario = scenarioFor(kind, craftText, { spot: currentSpot(), speed: dropSpeed, part: partSel.value });
+    scenario = scenarioFor(kind, craftText, { spot: currentSpot(), speed: dropSpeed, part: partSel.value, sleeping: sleepBox.checked, rocketText });
   } catch (e) {
     message = `Could not start ${kind}: ${e instanceof Error ? e.message : String(e)}`;
     return;
@@ -346,6 +408,11 @@ function stepOnce(r: Run): void {
     r.substeps = s;
   } else {
     const batch = new CommandBatch();
+    if (r.sleepAsk !== null) {
+      batch.setSleeping(r.sleepAsk);
+      r.sleeping = r.sleepAsk;
+      r.sleepAsk = null;
+    }
     if (r.scenario.script) r.scenario.script(batch, r.step);
     else if (r.kind === 'fly') r.sent = throttleCommands(batch, r.scenario.flight.thrusterCount, r.wanted, r.sent);
     r.substeps = r.recorder!.step(batch);
@@ -379,6 +446,7 @@ function advance(r: Run, n: number): void {
     stepOnce(r);
   }
   r.snap = r.world.snapshot();
+  refreshState(r);
 }
 
 function setPaused(paused: boolean): void {
@@ -482,11 +550,24 @@ function syncButtons(): void {
   const hand = run !== null && run.kind === 'fly' && run.player === null;
   for (const b of [tDownBtn, tUpBtn, tFullBtn, tCutBtn]) b.disabled = !hand;
   flyBtn.classList.toggle('on', run?.kind === 'fly' && run.player === null);
+  rocketBtn.classList.toggle('on', run?.kind === 'rocket');
+  roverBtn.classList.toggle('on', run?.kind === 'rover');
+  sleepBox.disabled = run === null || run.player !== null || run.scenario.flight.segmentOf === null;
   hopBtn.classList.toggle('on', run?.kind === 'hop');
   for (const b of dropBtns) b.classList.toggle('on', run?.kind === 'drop' && Number(b.dataset.speed) === dropSpeed);
 }
 
 const hex = (h: bigint): string => '0x' + h.toString(16).padStart(16, '0');
+
+/** Sleeping, segments asleep, bodies and vessels, for the status line (empty for a craft with no segments). */
+function stateText(r: Run): string {
+  if (r.seg === null) return '';
+  const c = modeCounts(r.modes);
+  const bodies = r.bodies ? r.bodies.flags.filter((f) => (f & 1) !== 0).length : 0;
+  const sleeping = r.sleeping === null ? 'sleeping per recording' : r.sleeping ? 'sleeping on' : 'sleeping off';
+  const vessels = r.vesselCount > 1 ? ` · <span class="warn">${r.vesselCount} vessels</span>` : '';
+  return `${sleeping} · ${c.asleep} asleep, ${c.live} live, ${c.rigid} rigid · ${bodies} bodies${vessels} · `;
+}
 
 function updateText(): void {
   saveBtn.disabled = !canSave();
@@ -535,6 +616,7 @@ function updateText(): void {
   statusEl.innerHTML =
     `<b>${state}</b> · ${p ? 'replay' : what} · step ${run.step}${of} (${(run.step * STEP_SECONDS).toFixed(2)} s) · ${run.substeps} substeps · ` +
     (run.coreSteps > 0 ? `core ${(run.coreMs / run.coreSteps).toFixed(2)} ms/step (worst ${run.coreMsMax.toFixed(2)}) · ` : '') +
+    stateText(run) +
     `${run.world.nodeCount} nodes, ${run.world.beamCount} beams · hash ${hex(run.world.stateHash)} · ${rendererName}${check}` +
     (message ? `\n${message}` : '');
 }
@@ -584,7 +666,26 @@ function frame(now: number): void {
 
 // ---- start ---------------------------------------------------------------------------------
 
+function syncLegend(): void {
+  stateLegend.style.display = stateBox.checked ? 'block' : 'none';
+  stressLegend.style.display = stateBox.checked ? 'none' : 'block';
+}
+
+/** Test hook: counts errors on the page so a headless run can say none happened. */
+function countErrors(): void {
+  const mark = (): void => document.documentElement.setAttribute('data-errors', String(Number(document.documentElement.getAttribute('data-errors') ?? '0') + 1));
+  document.documentElement.setAttribute('data-errors', '0');
+  window.addEventListener('error', mark);
+  window.addEventListener('unhandledrejection', mark);
+  const original = console.error.bind(console);
+  console.error = (...a: unknown[]) => {
+    mark();
+    original(...a);
+  };
+}
+
 async function main(): Promise<void> {
+  countErrors();
   const res = await fetch('./beam_core.wasm');
   if (!res.ok) throw new Error(`could not load beam_core.wasm (${res.status})`);
   core = await Core.load(await res.arrayBuffer());
@@ -602,7 +703,14 @@ async function main(): Promise<void> {
 
   const params = new URLSearchParams(location.search);
   const sceneParam = params.get('scene');
-  const kind: ScenarioKind = sceneParam === 'hop' || sceneParam === 'drop' || sceneParam === 'part' ? sceneParam : 'fly';
+  const kind: ScenarioKind =
+    sceneParam === 'hop' || sceneParam === 'drop' || sceneParam === 'part' || sceneParam === 'rocket' || sceneParam === 'rover' ? sceneParam : 'fly';
+  const rocketRes = await fetch('./tall-rocket.craft.json');
+  if (rocketRes.ok) rocketText = await rocketRes.text();
+  rocketBtn.disabled = rocketText === '';
+  if (params.get('sleep') === '0') sleepBox.checked = false;
+  if (params.get('view') === 'state') stateBox.checked = true;
+  syncLegend();
   const speedParam = Number(params.get('drop'));
   if (speedParam > 0) dropSpeed = speedParam;
   const spotParam = params.get('spot');
@@ -610,6 +718,9 @@ async function main(): Promise<void> {
   const partParam = params.get('part');
   if (partParam !== null && GALLERY_PARTS.some((p) => p.type === partParam)) partSel.value = partParam;
   const steps = params.get('steps');
+  // Test hook: more steps per frame, so a headless run with slow software rendering reaches its step.
+  const burst = Number(params.get('burst'));
+  if (burst > 0) MAX_STEPS_PER_FRAME = burst | 0;
   const stop = params.get('stopat');
   if (stop !== null) stopAt = Math.max(0, Number(stop) | 0);
   if (params.get('beams') === '0') beamsBox.checked = false;
@@ -626,6 +737,18 @@ async function main(): Promise<void> {
 
   flyBtn.addEventListener('click', () => startScenario('fly'));
   hopBtn.addEventListener('click', () => startScenario('hop', HOP_STEPS));
+  rocketBtn.addEventListener('click', () => startScenario('rocket'));
+  roverBtn.addEventListener('click', () => startScenario('rover'));
+  sleepBox.addEventListener('change', () => {
+    if (run && run.player === null) run.sleepAsk = sleepBox.checked;
+  });
+  stateBox.addEventListener('change', () => {
+    syncLegend();
+    if (run) {
+      refreshState(run);
+      drawRun(run);
+    }
+  });
   for (const b of dropBtns) {
     b.addEventListener('click', () => {
       dropSpeed = Number(b.dataset.speed);
@@ -700,6 +823,12 @@ async function main(): Promise<void> {
     const until = steps !== null ? Math.max(0, Number(steps) | 0) : kind === 'hop' ? HOP_STEPS : kind === 'part' ? 0 : -1;
     if (kind === 'part' && partSel.value === '') partSel.value = GALLERY_PARTS[0]!.type;
     startScenario(kind, until);
+    // Test hook: run straight to the step in one go (no frames), so a headless run with slow software rendering gets there.
+    if (params.get('jump') === '1' && run && until > 0) {
+      advance(run, until - run.step);
+      drawRun(run);
+      updateText();
+    }
   }
   requestAnimationFrame(frame);
 }

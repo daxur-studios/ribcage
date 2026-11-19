@@ -45,6 +45,7 @@ for (const [from, to] of vendored) {
 // The craft page's hopper and its sample flight (the committed hard landing).
 copyFileSync(join(root, 'web', 'craft.html'), join(dist, 'web', 'craft.html'));
 copyFileSync(join(root, 'test', 'fixtures', 'hopper.craft.json'), join(dist, 'web', 'hopper.craft.json'));
+copyFileSync(join(root, 'test', 'fixtures', 'tall-rocket.craft.json'), join(dist, 'web', 'tall-rocket.craft.json'));
 copyFileSync(join(root, 'test', 'fixtures', 'hard-landing.rcrd'), join(dist, 'web', 'hard-landing.rcrd'));
 copyFileSync(join(root, 'test', 'fixtures', 'weak-bridge.rcrd'), join(dist, 'web', 'weak-bridge.rcrd'));
 copyFileSync(join(root, 'test', 'fixtures', 'tower-collapse.rcrd'), join(dist, 'web', 'tower-collapse.rcrd'));

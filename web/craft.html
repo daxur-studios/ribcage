@@ -64,6 +64,9 @@
 <div id="bar">
   <div class="group"><span>Fly</span>
     <button id="fly" title="The hopper on the pad: fly it with the throttle keys">Hopper</button>
+    <button id="rocket" title="The tall rocket on its clamp: thrust, a knock at 20 s, engine cut">Tall rocket</button>
+    <button id="rover" title="The test rover driving over a flat field">Test rover</button>
+    <label title="Rigid segments that rest go to sleep. Changing it mid-run is recorded (CMD_SET_SLEEPING)"><input type="checkbox" id="sleep" checked> sleeping</label>
     <button id="hop" title="The scripted hop: lift off, drift 7 m, cut the engine, hard landing (22 s)">Scripted hop</button>
   </div>
   <div class="group"><span>Drop</span>
@@ -110,6 +113,7 @@
     <label><input type="checkbox" id="panels" checked> panels</label>
     <label><input type="checkbox" id="nodes"> nodes</label>
     <label><input type="checkbox" id="stress" checked> stress colours</label>
+    <label title="Colour each segment live, asleep or never-live rigid, with boxes round rigid bodies and vessels"><input type="checkbox" id="state"> segment state</label>
     <label><input type="checkbox" id="follow" checked> follow</label>
     <button id="reset-view" title="Back to the starting view">Reset view</button>
   </div>
@@ -149,10 +153,18 @@
   </div>
   <div id="hint">Throttle: ↑/w up, ↓/s down, z full, x cut. Space pauses, . steps once, r restarts. Drag to orbit, wheel to zoom.</div>
   <div id="legend">
+   <div id="state-legend" style="display:none">
+    <div><span class="swatch" style="background:#ff8c32"></span>live (simulated, carries stress)</div>
+    <div><span class="swatch" style="background:#3cc896"></span>asleep (rests, one body)</div>
+    <div><span class="swatch" style="background:#786eff"></span>never live (engine, pod)</div>
+    <div>white box: rigid body · yellow box: vessel</div>
+   </div>
+   <div id="stress-legend">
     <div>beam stress (strain ÷ yield)</div>
     <div class="ramp"></div>
     <div class="row"><span>compression</span><span>0</span><span>yield</span></div>
     <div><span class="swatch" style="background:#d96bff"></span>bent past yield &nbsp;(broken beams are hidden)</div>
+   </div>
   </div>
 </div>
 <div id="status">loading…</div>

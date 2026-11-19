@@ -570,3 +570,38 @@ Sleeping on: the whole stack is one body from step 180; 31 wakes, 32 sleeps; eve
 - 5.12: `runTallRocket` gives the series (`bodies` and `asleep` every 30 steps) for a panel; the knock is `tallRocketCommands`. Show the all-live and sleeping tips side by side; the knock is the interesting scene, the sway is large.
 - 5.13: if the rocket should settle to sleep after a knock, the wake rule needs to wake only the knocked segments, and a quieter threshold after a large sway.
 - **[oracle-candidate]** Should a throttle step or a commanded force wake the whole craft, or only the segments it acts on? Waking all prevents any re-sleep here.
+
+## 2026-11-19 (phase 5.12: rigid on the page)
+
+### Decisions
+
+- **No change to `core/`.** The page reads `segments()`, `sleep()`, `bodies()` and `vessels()`, which already existed. `src/segment-view.ts` holds the logic as pure functions so Node tests pin it; the page only draws.
+- **Segment state view** (checkbox "segment state", `?view=state`): a beam takes the colour of its livest end (live orange, asleep green, never-live rigid violet; a node with no segment counts as live). Body outlines are axis-aligned boxes round each live body's nodes (white); vessel boxes (yellow) appear only once there is more than one vessel.
+- **Sleeping toggle** is a page checkbox. At start it sets the flight option. Mid-run it queues `CMD_SET_SLEEPING` for the next step, so the recording carries it and replays. Disabled for replays and craft without segments.
+- **Rocket and rover** are selectable (`?scene=rocket`, `?scene=rover`). The rocket reuses `prepareTallRocket` and `tallRocketCommands`; the rover has no craft file, so the page wraps `rover()` in a minimal craft shape. The rover plays with sleeping on and drove without errors; not otherwise examined.
+- **Follow camera** centres on the root vessel's nodes (`rootVesselNodes`: the vessel of the lowest live node, the identity that survives every split) once the craft has split.
+- **Test hooks** on the page: `?jump=1` runs straight to `steps` in one go, `?burst=N` raises steps per frame, and the page counts errors (`window.onerror`, rejections, `console.error`) into a `data-errors` attribute. Headless software rendering advances too few frames to reach step 1320 otherwise.
+- **Browser test** (`test/browser.test.ts`) finds Edge or Chrome, serves `dist/` in-process, and compares the page's hash with Node. It skips without a browser or a built page (`pnpm build:web`). Headless software rendering stalls now and then, so a stalled run is killed and tried again, up to five times.
+
+### Measured
+
+- Hop with sleeping on, run in the headless browser to step 1320: `0x8e49fe2d420d03e2`, equal to the rigid golden and to Node; `data-errors` 0. Rover to step 400: no errors.
+- Tall rocket on the page, sleeping on: standing at step 300 all 15 segments asleep, one body (4 substeps). Right after the knock (step 1215): 0 asleep, 15 live, 2 bodies, 11 substeps. The whole craft is awake.
+- Hard landing on the page: 2 vessels, the torn leg boxed apart from the root; 41 beams broken, 2 of 4 legs lost.
+- Demo (local, `artifacts/videos/m5-12/rocket-demo.mp4`, 24 s, not committed): the rocket under thrust and the knock, all-live left and sleeping right. Last readings in the recording at about step 1800 (in the sway after the knock, so the weak case for sleeping): 0.96 ms per step all-live against 0.51 sleeping on, a single reading. The phase table in the 5.11 record is the stronger number (standing 0.96 against 0.29, thrust 0.96 against 0.20).
+
+### Findings
+
+- The page confirms the 5.11 finding: a knock wakes the whole craft and it does not go back to sleep. The plan's "a knock wakes part of it and it settles" is not met; shown as it is, no change to `core/src/sleep.rs`.
+- Beams are mostly hidden behind the skin panels on the rocket and hopper, so the state view shows mainly through the body boxes and the status counts; turn panels off to see the beam colours.
+
+### Not checked
+
+- Only Edge headless with software WebGL; no real GPU and no WebGPU path in the browser test (the built-in pane's WebGPU renderer would not finish starting here). No other browser. The side-by-side demo has no narration and its ms per step is one reading from two separate pages. The rover on the page was not driven by hand, only run to step 400. The goldens (all-live hop, rigid hop, weak bridge, tower collapse, hard landing) replay in their existing tests.
+
+### For 5.13
+
+- Timing for the milestone demo: take ms per step from the phase table, not from a live page (two pages and software rendering share one CPU).
+- The state view's colours and `modeCounts` are ready for a small legend or panel if wanted; sleeping reads as "asleep" only after the first step.
+- Still open from 5.11: whether a throttle step or a commanded force should wake the whole craft.
+

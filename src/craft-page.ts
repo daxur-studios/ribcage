@@ -9,12 +9,15 @@
  * thing that reaches the world is a `setThrottle` command in a recorded list.
  */
 
-import type { CommandBatch } from './commands.ts';
+import { CommandBatch } from './commands.ts';
 import { prepareFlight, type Flight } from './flight.ts';
 import { centreOf, clearance, hopCommands, lostLegs, PAD, prepareDrop, prepareHop, tiltDegrees, type Spot } from './landing.ts';
+import type { Craft } from './parts/assemble.ts';
 import type { LoadedCraft } from './parts/craft-file.ts';
 import { saveCraft, type CraftPartSpec } from './parts/craft-file.ts';
-import type { Terrain } from './terrain.ts';
+import { compileRover, driveRover, rover, type RoverParams } from './parts/rover.ts';
+import { prepareTallRocket, tallRocketCommands } from './tall-rocket.ts';
+import { compileTerrain, landingField, type Terrain } from './terrain.ts';
 
 type V = [number, number, number];
 
@@ -140,19 +143,27 @@ export function readout(craft: LoadedCraft['craft'], field: Terrain, now: ArrayL
   };
 }
 
-/** The centre of the craft's nodes, which the follow camera tracks. */
-export function craftCentre(craft: LoadedCraft['craft'], positions: ArrayLike<number>): V {
+/**
+ * The centre of the craft's nodes, which the follow camera tracks. With `only` (the root vessel's
+ * nodes after a split, plan 005 phase 5.12) it is the centre of just those, so a leg that broke off
+ * does not drag the camera.
+ */
+export function craftCentre(craft: LoadedCraft['craft'], positions: ArrayLike<number>, only: readonly number[] | null = null): V {
   return centreOf(
     positions,
-    craft.nodes.map((_, i) => i),
+    only ?? craft.nodes.map((_, i) => i),
   );
 }
 
 // ---- scenarios -----------------------------------------------------------------------------
 
-export type ScenarioKind = 'fly' | 'hop' | 'drop' | 'part';
+export type ScenarioKind = 'fly' | 'hop' | 'drop' | 'part' | 'rocket' | 'rover';
 
-/** What the page starts: a flight, and the commands a script adds on each step (none for hand flying). */
+/**
+ * What the page starts: a flight, and the commands a script adds on each step (none for hand flying).
+ * `flight.loaded` is a craft file's load for most kinds; the rover has no craft file, so only its
+ * `craft` is real (the page reads nothing else of it).
+ */
 export interface Scenario {
   kind: ScenarioKind;
   flight: Flight;
@@ -168,6 +179,50 @@ export interface ScenarioOptions {
   speed?: number;
   /** The part type for the gallery. */
   part?: string;
+  /** Sleeping on (the default) or off at the start, for the craft kinds that have segments. */
+  sleeping?: boolean;
+  /** The tall rocket's craft file text (for `rocket`). */
+  rocketText?: string;
+}
+
+/** The test rover of phase 5.6: a truss on four rotor-driven wheels, set down on the landing field's pad. */
+export const ROVER_PARAMS: RoverParams = {
+  length: 2,
+  width: 1.2,
+  height: 0.5,
+  x: -6,
+  z: 0,
+  axleHeight: 0.452,
+  chassisMass: 340,
+  stub: 0.3,
+  wheel: { rimNodes: 24, radius: 0.4, material: 'steel', memberArea: 2e-4, mass: 30, nodeRadius: 0.05 },
+};
+/** The rover's scripted drive: settle 3 s, roll 5 s at this wheel speed (rad/s) and torque cap (N·m), then stop. */
+export const ROVER_DRIVE_FROM = 180;
+export const ROVER_DRIVE_TO = 480;
+export const ROVER_SPEED = 2;
+export const ROVER_CAP = 150;
+
+/** The rover as a scenario: its commands (terrain, parts, joints) and the drive script. */
+function roverScenario(sleeping: boolean): Scenario {
+  const r = rover(ROVER_PARAMS);
+  const setup = new CommandBatch();
+  const field = landingField();
+  compileTerrain(setup, field);
+  compileRover(setup, r, { rigid: true });
+  if (sleeping) setup.setSleeping(true);
+  // The page reads the nodes, panels and the hopper-shaped readouts off `craft`; the rover has no tree or thrusters.
+  const craft = { ...r.craft, beams: r.craft.beams, tree: [], thrusters: [] } as unknown as Craft;
+  const flight: Flight = { loaded: { craft } as unknown as LoadedCraft, field, setup, thrusterCount: 0, segmentOf: [] };
+  return {
+    kind: 'rover',
+    flight,
+    script: (batch, step) => {
+      if (step === ROVER_DRIVE_FROM) driveRover(batch, r, ROVER_SPEED, ROVER_CAP);
+      if (step === ROVER_DRIVE_TO) driveRover(batch, r, 0, ROVER_CAP);
+    },
+    steps: null,
+  };
 }
 
 /** The default part of each type, for the gallery: the parameters the hopper uses. */
@@ -206,16 +261,23 @@ export function galleryCraft(type: string): string {
 
 /** Builds a scenario from a craft file's text. Throws what the craft loader throws. */
 export function scenarioFor(kind: ScenarioKind, craftText: string, opts: ScenarioOptions = {}): Scenario {
+  const sleeping = opts.sleeping ?? true;
   switch (kind) {
     case 'fly':
-      return { kind, flight: prepareFlight(craftText), script: null, steps: null };
+      return { kind, flight: prepareFlight(craftText, undefined, { sleeping }), script: null, steps: null };
+    case 'rocket': {
+      const rocket = prepareTallRocket(opts.rocketText ?? craftText, { sleeping });
+      return { kind, flight: rocket.flight, script: (batch, step) => tallRocketCommands(batch, rocket, step), steps: null };
+    }
+    case 'rover':
+      return roverScenario(sleeping);
     case 'hop': {
-      const hop = prepareHop(craftText);
+      const hop = prepareHop(craftText, { sleeping });
       return { kind, flight: hop.flight, script: (batch, step) => hopCommands(batch, hop, step), steps: null };
     }
     case 'drop':
-      return { kind, flight: prepareDrop(craftText, opts.spot ?? PAD, opts.speed ?? 7), script: null, steps: null };
+      return { kind, flight: prepareDrop(craftText, opts.spot ?? PAD, opts.speed ?? 7, undefined, { sleeping }), script: null, steps: null };
     case 'part':
-      return { kind, flight: prepareDrop(galleryCraft(opts.part ?? 'tank'), PAD, 0), script: null, steps: null };
+      return { kind, flight: prepareDrop(galleryCraft(opts.part ?? 'tank'), PAD, 0, undefined, { sleeping }), script: null, steps: null };
   }
 }
