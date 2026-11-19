@@ -10,7 +10,7 @@
 import { COMMAND_BYTES, type CommandBatch } from './commands.ts';
 
 /** The ABI version this loader was written for (`ABI_VERSION` in core/src/ffi.rs). */
-export const ABI_VERSION = 8;
+export const ABI_VERSION = 9;
 
 /** A host pointer inside the core (an integer to JavaScript). */
 export type HostPtr = number;
@@ -85,6 +85,11 @@ interface Exports {
   rc_est_seam_ratio_ptr(h: number): number;
   rc_est_seam_measured_ptr(h: number): number;
   rc_est_segment_ratio_ptr(h: number): number;
+  rc_sleep_segment_count(h: number): number;
+  rc_sleep_asleep_ptr(h: number): number;
+  rc_sleep_ratio_ptr(h: number): number;
+  rc_sleep_check_count(h: number): number;
+  rc_sleep_checks_ptr(h: number): number;
 }
 
 /** Segments, seams and each node's segment, as copies (plan 005, phase 5.1). */
@@ -193,6 +198,39 @@ export interface CoreEvent {
 export const EVENT_YIELD = 1;
 export const EVENT_BREAK = 2;
 export const EVENT_FREEZE = 3;
+/** A sleeping segment woke (phase 5.8): `index` is the segment, `value` a `WAKE_*` reason. */
+export const EVENT_WAKE = 4;
+/** A segment went to sleep (phase 5.8): `index` is the segment, `value` its last reading. */
+export const EVENT_SLEEP = 5;
+/** Wake reasons (`sleep::WAKE_*`). */
+export const WAKE_CONTACT = 1;
+export const WAKE_IMPACT = 2;
+export const WAKE_THRUST = 3;
+export const WAKE_JOINT = 4;
+export const WAKE_ESTIMATE = 5;
+export const WAKE_NEIGHBOUR = 6;
+export const WAKE_OFF = 7;
+
+/** One switch pass of the last step (`sleep::SwitchCheck`): totals before and after. */
+export interface SwitchCheck {
+  /** 1 a wake pass, 2 a sleep pass. */
+  kind: number;
+  momentumBefore: [number, number, number];
+  spinBefore: [number, number, number];
+  energyBefore: number;
+  momentumAfter: [number, number, number];
+  spinAfter: [number, number, number];
+  energyAfter: number;
+}
+
+/** The sleep state after the last step, as copies (phase 5.8). Empty before sleeping ran. */
+export interface SleepView {
+  /** Per segment: 1 when asleep. */
+  asleep: Uint32Array;
+  /** Per segment: the last reading as a fraction of yield (measured live, estimated rigid). */
+  ratio: Float64Array;
+  checks: SwitchCheck[];
+}
 
 const EVENT_BYTES = 24;
 
@@ -418,6 +456,33 @@ export class Core {
       ratio: new Float64Array(mem, x.rc_est_seam_ratio_ptr(h), n).slice(),
       measured: new Float64Array(mem, x.rc_est_seam_measured_ptr(h), n).slice(),
       segment: new Float64Array(mem, x.rc_est_segment_ratio_ptr(h), segs).slice(),
+    };
+  }
+
+  /** The sleep state after the last step, as copies. */
+  sleep(h: HostPtr): SleepView {
+    const x = this.#x;
+    const n = x.rc_sleep_segment_count(h);
+    const k = x.rc_sleep_check_count(h);
+    const mem = x.memory.buffer;
+    const raw = new Float64Array(mem, x.rc_sleep_checks_ptr(h), k * 15).slice();
+    const checks: SwitchCheck[] = [];
+    for (let i = 0; i < k; i++) {
+      const v = raw.subarray(i * 15, i * 15 + 15);
+      checks.push({
+        kind: v[0]!,
+        momentumBefore: [v[1]!, v[2]!, v[3]!],
+        spinBefore: [v[4]!, v[5]!, v[6]!],
+        energyBefore: v[7]!,
+        momentumAfter: [v[8]!, v[9]!, v[10]!],
+        spinAfter: [v[11]!, v[12]!, v[13]!],
+        energyAfter: v[14]!,
+      });
+    }
+    return {
+      asleep: new Uint32Array(mem, x.rc_sleep_asleep_ptr(h), n).slice(),
+      ratio: new Float64Array(mem, x.rc_sleep_ratio_ptr(h), n).slice(),
+      checks,
     };
   }
 

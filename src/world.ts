@@ -6,7 +6,7 @@
  * in the page.
  */
 
-import type { ApplyResult, BeamView, BodyView, CoreEvent, EstimateView, HostPtr, JointView, SegmentProps, SegmentView } from './core.ts';
+import type { ApplyResult, BeamView, BodyView, CoreEvent, EstimateView, HostPtr, JointView, SegmentProps, SegmentView, SleepView } from './core.ts';
 import { Core } from './core.ts';
 import type { CommandBatch } from './commands.ts';
 
@@ -78,6 +78,11 @@ export class World {
   /** The stress estimate after the last step (empty when off). */
   estimate(): EstimateView {
     return this.#core.estimate(this.#h);
+  }
+
+  /** The sleep state after the last step (phase 5.8; empty before sleeping ran). */
+  sleep(): SleepView {
+    return this.#core.sleep(this.#h);
   }
 
   /** One segment's mass, centre and inertia from the current positions, or `null`. */

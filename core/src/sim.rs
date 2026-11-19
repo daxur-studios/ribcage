@@ -57,6 +57,9 @@ fn step_inner(world: &mut World, choice: Choice) -> StepStats {
     world.events.clear();
     world.clamped_nodes = 0;
     let done = world.step_count + 1;
+    // Sleep and wake (phase 5.8): the wakes that cannot wait for the estimate, before anything
+    // reads the step's start. No-op unless sleeping was ever switched on.
+    world.sleep_before_solve(done);
     crate::estimate::begin_step(world);
     // Thrust goes in as ordinary external force, from the positions the step starts with.
     apply_thrust(world);
@@ -114,6 +117,7 @@ fn step_inner(world: &mut World, choice: Choice) -> StepStats {
         }
     }
     crate::estimate::finish_step(world);
+    world.sleep_after_step(done);
     for f in world.force.iter_mut() {
         *f = Vec3::ZERO;
     }
@@ -209,6 +213,32 @@ pub fn state_hash(world: &World) -> u64 {
             if world.node_body[i] != NO_BODY {
                 mix_vec(&mut h, world.node_offset[i]);
             }
+        }
+    }
+    // Sleep state (phase 5.8), only once `CMD_SET_SLEEPING` has run: a world that never sent it
+    // hashes as before. The switch checks are outputs and stay out.
+    if world.sleep.ever {
+        let sl = &world.sleep;
+        mix(&mut h, sl.on as u64);
+        mix(&mut h, sl.primed as u64);
+        mix(&mut h, sl.asleep.len() as u64);
+        for s in 0..sl.asleep.len() {
+            mix(&mut h, sl.asleep[s] as u64);
+            mix(&mut h, sl.live_steps[s] as u64);
+            mix(&mut h, sl.quiet_steps[s] as u64);
+            mix(&mut h, sl.damp_left[s] as u64);
+            mix_real(&mut h, sl.ratio[s]);
+            mix_real(&mut h, sl.ref_measured[s]);
+            mix_real(&mut h, sl.ref_estimate[s]);
+            mix(&mut h, sl.settle_left[s] as u64);
+        }
+        mix(&mut h, sl.throttle.len() as u64);
+        for &t in &sl.throttle {
+            mix_real(&mut h, t);
+        }
+        mix(&mut h, sl.near.len() as u64);
+        for &n in &sl.near {
+            mix(&mut h, n as u64);
         }
     }
     // Which segments a moving joint triggered in the last step, only once a joint exists.

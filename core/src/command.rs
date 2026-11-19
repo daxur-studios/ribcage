@@ -78,6 +78,10 @@ pub const CMD_ADD_JOINT: u32 = 15;
 /// rate in rad/s, finite and zero or more, `f[2]` = torque cap in newton-metres, finite and zero or
 /// more. Result: 1.
 pub const CMD_SET_JOINT_TARGET: u32 = 16;
+/// Switches sleeping on or off (plan 005, phase 5.8; see [`crate::sleep`]): `a` = 1 on, 0 off
+/// (anything else rejects the record). On also switches the stress estimate on, which it reads.
+/// Off wakes every segment it put to sleep at the start of the next step. Result: 1.
+pub const CMD_SET_SLEEPING: u32 = 17;
 pub const REJECTED: u32 = u32::MAX;
 
 /// One command record. `repr(C)`; the TypeScript host writes it field by field (`src/commands.ts`).
@@ -271,6 +275,13 @@ fn apply_one(w: &mut World, c: &Command) -> u32 {
             } else {
                 REJECTED
             }
+        }
+        CMD_SET_SLEEPING => {
+            if c.a > 1 {
+                return REJECTED;
+            }
+            w.set_sleeping(c.a == 1);
+            1
         }
         _ => REJECTED,
     }

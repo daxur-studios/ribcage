@@ -15,6 +15,13 @@ pub const EVENT_BREAK: u32 = 2;
 /// as a `Real`) at whose end the bad value was found.
 pub const EVENT_FREEZE: u32 = 3;
 
+/// A sleeping segment woke (phase 5.8). `index` is the segment; `value` is the reason, a
+/// `sleep::WAKE_*` number as a `Real`.
+pub const EVENT_WAKE: u32 = 4;
+/// A segment went to sleep (phase 5.8). `index` is the segment; `value` is its last reading as a
+/// fraction of yield.
+pub const EVENT_SLEEP: u32 = 5;
+
 /// One event. `index` is a world index (a beam for yield and break, a node for freeze), never a
 /// packed one.
 /// `step` is the world's step count after the step that produced the event. `value` is the

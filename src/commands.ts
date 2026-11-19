@@ -27,6 +27,8 @@ export const CMD_RELEASE_RIGID = 14;
 export const CMD_ADD_JOINT = 15;
 /** Sets a joint's drive. See `CommandBatch.setJointTarget`. */
 export const CMD_SET_JOINT_TARGET = 16;
+/** Switches sleeping on or off (plan 005, phase 5.8). See `CommandBatch.setSleeping`. */
+export const CMD_SET_SLEEPING = 17;
 /** Joint drive modes (`joint::JOINT_FREE`, `JOINT_SERVO`, `JOINT_ROTOR`). */
 export const JOINT_FREE = 0;
 export const JOINT_SERVO = 1;
@@ -218,6 +220,15 @@ export class CommandBatch {
    */
   setJointTarget(joint: number, mode: number, target: number, rate: number, cap: number): number {
     return this.#push(CMD_SET_JOINT_TARGET, joint, mode, [target, rate, cap]);
+  }
+
+  /**
+   * Switches sleeping on or off (plan 005, phase 5.8): barely loaded segments go rigid and wake
+   * under load or on a trigger. On also switches the stress estimate on. Off wakes every sleeping
+   * segment at the start of the next step. Off by default.
+   */
+  setSleeping(on: boolean): number {
+    return this.#push(CMD_SET_SLEEPING, on ? 1 : 0, 0, []);
   }
 
   /** The whole height array as records of six (the last may be shorter), in index order. */

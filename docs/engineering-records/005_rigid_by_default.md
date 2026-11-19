@@ -371,3 +371,60 @@ Done by Opus, asked to fix the launch found while recording the 5.7 clip. There 
   - At 4 kN, the energy gained is between 97% and 100.5% of the work.
   The 5.7 stress test keeps its 4 kN "rock", since its bounds were measured on it, and the comment now says it flips the rover.
 - **[finding]** Not this question, seen on the way: the all-live rover (`compileRover(..., { rigid: false })`) does not rest. Its wheel beams pass 5x yield within five steps of the start, and it bounces with its centre of mass near 1.2 m instead of 0.58 m. No test uses it; the wheels are rigid by default. This belongs to 5.6, and I did not rework it.
+
+
+## 2026-11-19 (phase 5.8: sleep and wake)
+
+Built by Opus. `cargo test --release` 140 passed, 5 ignored; `pnpm test` 245 passed, 1 skipped (246); `pnpm typecheck` clean. The four goldens replay with sleeping off (weak-bridge at ABI 2, tower-collapse at 3, hard-landing at 4, hard-landing-rigid), and both hops end at their hashes at step 1320 (0xd92f2aad01c0e048 all-live, 0x5a1c383b76d89ea6 rigid). ABI 8 → 9 (`CMD_SET_SLEEPING` = 17, wake and sleep events, `rc_sleep_*` readers); the decoder reads 2 to 9.
+
+### As built
+
+- **[decision]** `core/src/sleep.rs`, off by default, switched on by `CMD_SET_SLEEPING` (recorded, so a replay sleeps the same way). It switches the stress estimate on with it, since the estimate needs the contact record. Turning sleeping off wakes every sleeper with reason 7 (`WAKE_OFF`). The sleep state enters the hash only once the command has run, so every earlier hash is unchanged.
+- **[decision]** Managed segments are the live ones and the never-live rigid ones the flight made at spawn. A segment with a joint node never sleeps (5.5's joint motion would wake it every step anyway). Rigid segments the host made by hand are left alone.
+- **[decision]** The reading per segment, against yield:
+  - a live segment reads its measured ratio (the worst `|λ| / λ_yield` of its beams and seam beams);
+  - a never-live rigid segment reads its estimate × 1.25 (`ESTIMATE_MARGIN`);
+  - an asleep segment reads the measured value it had when it slept, plus 1.25 × the change in its estimate since then. Its reference estimate is retaken over the first 10 steps after any switch (`SETTLE_STEPS`), because merging a whole stance into one body redistributes the foot loads for about 8 steps (a leg seam's estimate jumps from 0.057 to 0.40 and back).
+  The estimate alone could not be used: it reads the standing legs at 0.057 of yield while they carry 0.197 inside the segment (5.7 found it blind inside a segment), and the raw estimate × 1.25 woke the tank the step after the whole craft merged.
+- **[decision]** Thresholds: wake over 25% of yield (`WAKE_LEVEL`, the brief's); sleep under 20% (`SLEEP_LEVEL`), and its reading changing by under 1% of yield per step, for 60 steps (`QUIET_STEPS`); live at least 30 steps after a wake (`MIN_LIVE_STEPS`). The brief's 8% sleep level was changed to 20%: the standing legs carry 19.6% of yield under the craft's weight, so at 8% the hopper would never sleep whole. 20% is four fifths of the wake level, which leaves a band of 5% of yield for hysteresis. 5.9 tunes all four against its equivalence test.
+- **[decision]** Wake triggers, tested before the solve each step:
+  1. contact: a node of the segment comes into the range test it was out of last step, or closes on the ground faster than 0.25 m/s;
+  2. impact: its contact force over the wake level;
+  3. thrust: a throttle change on a thruster that rides it;
+  4. joint: the joint-motion mark from 5.5;
+  5. estimate: the reading over the wake level, after the step;
+  6. neighbour: a seam neighbour woke or reads over the wake level.
+  A trigger spreads to the segment's seam neighbours in the same pass. Host forces are not a direct trigger; the estimate catches them (the cycled-load test below is exactly that case).
+- **[decision]** After any switch, bodies are rebuilt by union-find over segments, along unbroken beams between asleep segments, so touching rigid segments merge into one body. Each body is made with 5.2's sum, so the brief's formulas hold on every switch. Events go out in the order of the switch passes (wake pass, then sleep pass), segment order within a pass: rule 8.
+- **[decision]** Wake damping: a woken segment's beams get damping × (1 + 4 · left / 10), fading over 10 steps. The factor is a placeholder; 5.9 tunes it.
+- **[decision]** Every switch pass writes a `SwitchCheck` (momentum, spin and kinetic energy before and after over the nodes and bodies involved), read by `World.sleep().checks`; both test suites check every one.
+
+### Measured
+
+- **[finding]** Two rigid segments sharing a seam (the ffi body scene, `core/tests/sleep.rs`) become one body of 100 kg (8 × 10 + 4 × 5) by step 59; the thrust cut at step 150 wakes segment 0 with `WAKE_THRUST` and segment 1 with `WAKE_NEIGHBOUR`. The golden 0x8fb3e3c32250148b after 200 steps holds natively, through the boundary, and in WebAssembly.
+- **[finding]** The hopper standing on the pad, rigid default: segments 1 to 3 sleep at step 59, the tank's segment 0 at 126, the legs at 307 (reading 0.196). After that the craft is one body, nothing wakes, and the substeps drop from 19 to 4. All-live (`rigid: false`) the engine and pod are not managed and it runs at 17 substeps.
+- **[finding]** Switch checks, worst over each run, relative to the craft's momentum at 10 m/s (spin at 20 m) and kinetic energy at 10 m/s:
+  - standing: 8 sleeps;
+  - hop: 9 sleeps, 9 wakes; momentum 2e-16, spin 2e-17, a wake changes energy by 5e-17;
+  - drop at 3 m/s: 8 sleeps; segments 0 to 5 form one body, the legs are still live at 600 steps;
+  - drop at 7 m/s: nothing sleeps in 600 steps.
+  Every sleep lowers kinetic energy or keeps it (worst +0, the largest fall 6e-10 relative); every wake keeps it to rounding.
+- **[finding]** The rigid hop with sleeping on: the tank sleeps at about step 90 and the legs at steps 155 to 174, in powered flight. The throttle step at 150 wakes by neighbour, the cut at 220 by thrust. At touchdown leg 6 wakes on contact at step 266, leg 9 on contact at 267, legs 7 and 8 by neighbour at 267. The first yield is at step 267 with sleeping on and off. The run is not equivalent: 41 breaks and 70 yields, hash 0xc2f0d492f949c2f3, against 40 and 76 off; 24007 substeps against 25080. After the landing the damaged craft reads 0.39 to 0.46 of yield (stress locked in by the plastic set, measured live), so it never sleeps again.
+- **[finding]** Ten simulated minutes (36000 steps) standing: 8 sleeps, no wakes, the largest reading 0.196 (98% of the sleep level). The sum of squared node speeds is 3.2e-12 m²/s² in minute 2 and the same in minute 10, so no energy is gained. 3.2 s, 4.13 substeps per step.
+- **[finding]** A downward push on the pod of 0.3 × the craft's weight, on 150 steps and off 150, from step 600, for ten minutes: 240 wakes (236 by neighbour, 4 by estimate) and 244 sleeps. The shortest wake-to-sleep is 60 steps, which is `QUIET_STEPS` (above `MIN_LIVE_STEPS`), and no switch adds energy. 40 s, 18.9 substeps per step. At 0.45 × the weight: 123 wakes, the shortest 62 steps. The test runs two minutes by default (48 wakes, 52 sleeps, shortest 60) and ten with `RIBCAGE_SLOW`.
+- **[finding]** The open question: a steady resting contact lets the legs sleep without missing the start of a hard landing. It stays in range, so it is no arrival; a foot coming into range, or closing faster than 0.25 m/s, wakes the leg before the solve. Above, the legs woke at step 266 and 267, and the first yield is at 267 either way.
+
+### Not checked
+
+- **[finding]** Equivalence (same breaks, legs lost, tilt) is not checked here: the hop differs by one break and six yields. That is 5.9's test.
+- **[finding]** The rigid stance carries its four feet unevenly: four contacts under one body are statically indeterminate, and the solver's split differs from the live craft's. It shows as the settle jump above, and it may move where the legs first yield on a landing.
+- **[assumption]** Wake damping (1 + 4 · left / 10) is untested beyond "it runs and the checks pass"; nothing measures whether it helps.
+- **[finding]** An asleep body drifts at about 1e-7 m/s on the pad, from the contact's leftover push; it does not grow over ten minutes.
+- **[assumption]** Not run on the page.
+- **[oracle-candidate]** Should an asleep segment's reading carry the residual λ of its seam beams at sleep (stored and re-added), so a damaged craft can sleep at its locked-in stress without reading falsely high or low on a later load?
+
+### For 5.9
+
+- Tune the four thresholds, the closing speed and the wake damping against the equivalence test, not against this phase's numbers.
+- Decide whether the post-landing locked-in readings (0.39 to 0.46) should let a damaged craft sleep (a sleep level over the locked-in value, or the residual-λ idea above).
+- The settle window (10 steps) and the 1.25 margin on the estimate are the first knobs if a sleeping craft wakes falsely or late.

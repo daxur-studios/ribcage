@@ -151,6 +151,9 @@ pub struct World {
     /// The stress estimate's switch, inputs and outputs (phase 5.7). Not hashed, not recorded,
     /// never read by the solve.
     pub est: crate::estimate::Estimate,
+    /// Sleep and wake (phase 5.8): the switch and its per-segment state. Off by default; in the
+    /// state hash once `CMD_SET_SLEEPING` has run.
+    pub sleep: crate::sleep::Sleep,
 }
 
 impl Default for World {
@@ -225,6 +228,7 @@ impl Default for World {
             joint_peak: Vec::new(),
             seg_triggered: Vec::new(),
             est: crate::estimate::Estimate::default(),
+            sleep: crate::sleep::Sleep::default(),
         }
     }
 }

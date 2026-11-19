@@ -16,6 +16,7 @@ pub mod maths;
 pub mod real;
 pub mod segment;
 pub mod sim;
+pub mod sleep;
 pub mod solver;
 pub mod terrain;
 pub mod thrust;

@@ -338,6 +338,7 @@ fn pack(world: &World, nodes: &[u32], beams: &[u32], packed: &mut [u32], root: u
                 island.body_torque[b] + (world.pos[u] - island.body_centre[b]).cross(f);
         }
     }
+    let boost = world.sleep.on && world.sleep.boosting();
     for &b in beams {
         let u = b as usize;
         island.beam_world.push(b);
@@ -346,7 +347,13 @@ fn pack(world: &World, nodes: &[u32], beams: &[u32], packed: &mut [u32], root: u
         island.rest.push(world.rest[u]);
         island.rest0.push(world.rest0[u]);
         island.compliance.push(world.compliance[u]);
-        island.damping.push(world.damping[u]);
+        // A just-woken segment's beams solve with extra damping (phase 5.8); untouched otherwise.
+        island.damping.push(if boost {
+            let (sa, sb) = (world.node_segment[world.beam_a[u] as usize], world.node_segment[world.beam_b[u] as usize]);
+            world.damping[u] * world.sleep.damp_scale(sa, sb)
+        } else {
+            world.damping[u]
+        });
         island.yield_strain.push(world.yield_strain[u]);
         island.break_strain.push(world.break_strain[u]);
         island.beam_flags.push(world.beam_flags[u]);

@@ -17,6 +17,8 @@ const THRUST_SCENE_120 = 0x765d0f4475514944n;
 /** A box and a tetrahedron as two segments, made rigid, merged and released (`BODY_SCENE_61` and `BODY_SCENE_120` in core/tests/ffi.rs). */
 const BODY_SCENE_61 = 0x06024ffac786af7bn;
 const BODY_SCENE_120 = 0x722722cfee9354f3n;
+/** The body scene with sleeping on and the thrust cut before step 150, after 200 steps (core/tests/sleep.rs). */
+const SLEEP_SCENE_200 = 0x8fb3e3c32250148bn;
 /** End hash of the reported scene after 720 steps at the default rule (`cargo run --release -p beam-core --example bench`). */
 const STANDARD_BENCH_720 = 0x871092299f3cea56n;
 
@@ -178,6 +180,49 @@ test("segments and a rigid body give the native hashes", async () => {
   }
   assert.equal(core.stateHash(h), BODY_SCENE_120);
   assert.equal(core.bodies(h).flags[0], 0, "released");
+  core.hostFree(h);
+});
+
+test("sleeping two segments into one body gives the native hash", async () => {
+  const core = await Core.load(loadBytes());
+  const h = core.hostNew();
+  const setup = new CommandBatch();
+  const spec = (rest: number) => ({ rest, compliance: 1e-5, damping: 20, yieldStrain: 5, breakStrain: 10 });
+  for (let k = 0; k < 8; k++) {
+    setup.addNode(k & 1 ? 0.5 : -0.5, k & 2 ? 50.5 : 49.5, k & 4 ? 0.5 : -0.5, 0.1, 0.1);
+  }
+  for (const [x, y, z] of [[2, 50, 0], [3, 50, 0], [2.5, 50, 0.8660254037844386], [2.5, 50.816496580927726, 0.28867513459481287]] as const) {
+    setup.addNode(x, y, z, 0.2, 0.1);
+  }
+  for (let i = 0; i < 8; i++) {
+    for (const bit of [1, 2, 4]) if ((i & bit) === 0) setup.addBeam(i, i | bit, spec(1));
+  }
+  for (const [a, b] of [[8, 9], [8, 10], [8, 11], [9, 10], [9, 11], [10, 11]] as const) setup.addBeam(a, b, spec(1));
+  setup.addBeam(1, 8, spec(1.5));
+  setup.addSegment(NO_SEGMENT, 0, 0, 0);
+  setup.addSegment(0, 0, 0.01, 1e-5);
+  for (let n = 0; n < 12; n++) setup.setNodeSegment(n, n < 8 ? 0 : 1);
+  setup.addThruster(0, 1, 300);
+  setup.setThrottle(0, 1);
+  setup.setSleeping(true);
+  assert.equal(core.applyCommands(h, setup).rejected, 0);
+  for (let s = 0; s < 200; s++) {
+    if (s === 150) {
+      const cut = new CommandBatch();
+      cut.setThrottle(0, 0);
+      assert.equal(core.applyCommands(h, cut).rejected, 0);
+    }
+    core.step(h);
+    if (s === 149) {
+      const sl = core.sleep(h);
+      assert.deepEqual([...sl.asleep], [1, 1], "both asleep before the cut");
+      const b = core.bodies(h);
+      assert.equal(b.segmentBody[0], b.segmentBody[1], "one body");
+      assert.ok(Math.abs(b.mass[b.segmentBody[0]!]! - 100) < 1e-9, "summed mass");
+    }
+  }
+  assert.deepEqual([...core.sleep(h).asleep], [0, 0], "awake after the cut");
+  assert.equal(core.stateHash(h), SLEEP_SCENE_200);
   core.hostFree(h);
 });
 

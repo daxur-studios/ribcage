@@ -33,9 +33,12 @@ use crate::world::{BeamSpec, World};
 /// 14) and the body readers, and puts bodies in both hashes (only while a body is alive). 7 added
 /// the joint commands (kinds 15 and 16) and the joint readers, and puts joints in both hashes (only
 /// once a joint exists). 8 added the stress estimate's switch and readers (`rc_set_estimate`,
-/// `rc_est_*`), which touch neither hash nor any command. Nothing else changed, so a recording
-/// made at ABI 2 to 7 still means the same thing and replays (`src/recording.ts`).
-pub const ABI_VERSION: u32 = 8;
+/// `rc_est_*`), which touch neither hash nor any command. 9 added sleeping (command kind 17,
+/// `CMD_SET_SLEEPING`, the wake and sleep events, kinds 4 and 5) and its readers (`rc_sleep_*`),
+/// and puts the sleep state in the state hash (only once the command has run). Nothing else
+/// changed, so a recording made at ABI 2 to 8 still means the same thing and replays
+/// (`src/recording.ts`).
+pub const ABI_VERSION: u32 = 9;
 
 /// Bytes per command record, for the host to check against its own layout.
 #[no_mangle]
@@ -686,4 +689,52 @@ pub unsafe extern "C" fn rc_est_seam_measured_ptr(h: *const Host) -> *const Real
 #[no_mangle]
 pub unsafe extern "C" fn rc_est_segment_ratio_ptr(h: *const Host) -> *const Real {
     (*h).world.est.seg_ratio.as_ptr()
+}
+
+/// Segments the sleep state covers (phase 5.8): the segment count once sleeping was switched on
+/// and a step ran, else zero. The length of `rc_sleep_asleep_ptr` and `rc_sleep_ratio_ptr`.
+///
+/// # Safety
+/// `h` is a live host pointer.
+#[no_mangle]
+pub unsafe extern "C" fn rc_sleep_segment_count(h: *const Host) -> u32 {
+    (*h).world.sleep.asleep.len() as u32
+}
+
+/// Per segment: 1 when sleeping put it to sleep and it is still rigid, one `u32`.
+///
+/// # Safety
+/// `h` is a live host pointer.
+#[no_mangle]
+pub unsafe extern "C" fn rc_sleep_asleep_ptr(h: *const Host) -> *const u32 {
+    (*h).world.sleep.asleep.as_ptr()
+}
+
+/// Per segment: the last step's load reading as a fraction of yield (measured when live, the
+/// estimate with its margin when rigid), one `Real`.
+///
+/// # Safety
+/// `h` is a live host pointer.
+#[no_mangle]
+pub unsafe extern "C" fn rc_sleep_ratio_ptr(h: *const Host) -> *const Real {
+    (*h).world.sleep.ratio.as_ptr()
+}
+
+/// Switch passes in the last step (each a wake pass or a sleep pass).
+///
+/// # Safety
+/// `h` is a live host pointer.
+#[no_mangle]
+pub unsafe extern "C" fn rc_sleep_check_count(h: *const Host) -> u32 {
+    (*h).world.sleep.checks.len() as u32
+}
+
+/// The last step's switch passes, 15 `Real` each: kind (1 wake, 2 sleep), then momentum,
+/// angular momentum about the origin and kinetic energy before, then the same after.
+///
+/// # Safety
+/// `h` is a live host pointer.
+#[no_mangle]
+pub unsafe extern "C" fn rc_sleep_checks_ptr(h: *const Host) -> *const Real {
+    (*h).world.sleep.checks.as_ptr() as *const Real
 }
