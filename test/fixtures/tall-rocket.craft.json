@@ -1,0 +1,149 @@
+{
+  "format": "ribcage-craft",
+  "version": 1,
+  "root": "engine",
+  "place": {
+    "x": 0,
+    "y": 0.6,
+    "z": 0,
+    "yaw": 0
+  },
+  "parts": [
+    {
+      "id": "engine",
+      "type": "engine",
+      "params": {
+        "ringNodes": 8,
+        "topRadius": 1.25,
+        "nozzleRadius": 1.25,
+        "height": 1,
+        "material": "steel",
+        "memberArea": 0.0006,
+        "mass": 800,
+        "maxThrust": 160000
+      }
+    },
+    {
+      "id": "tank0",
+      "type": "tank",
+      "params": {
+        "radius": 1.25,
+        "length": 2.5,
+        "ringNodes": 8,
+        "rings": 4,
+        "material": "aluminium",
+        "wallArea": 0.0008,
+        "mass": 1000
+      }
+    },
+    {
+      "id": "tank1",
+      "type": "tank",
+      "params": {
+        "radius": 1.25,
+        "length": 2.5,
+        "ringNodes": 8,
+        "rings": 4,
+        "material": "aluminium",
+        "wallArea": 0.0008,
+        "mass": 1000
+      }
+    },
+    {
+      "id": "tank2",
+      "type": "tank",
+      "params": {
+        "radius": 1.25,
+        "length": 2.5,
+        "ringNodes": 8,
+        "rings": 4,
+        "material": "aluminium",
+        "wallArea": 0.0008,
+        "mass": 1000
+      }
+    },
+    {
+      "id": "tank3",
+      "type": "tank",
+      "params": {
+        "radius": 1.25,
+        "length": 2.5,
+        "ringNodes": 8,
+        "rings": 4,
+        "material": "aluminium",
+        "wallArea": 0.0008,
+        "mass": 1000
+      }
+    },
+    {
+      "id": "tank4",
+      "type": "tank",
+      "params": {
+        "radius": 1.25,
+        "length": 2.5,
+        "ringNodes": 8,
+        "rings": 4,
+        "material": "aluminium",
+        "wallArea": 0.0008,
+        "mass": 1000
+      }
+    },
+    {
+      "id": "pod",
+      "type": "pod",
+      "params": {
+        "ringNodes": 8,
+        "bottomRadius": 1.25,
+        "topRadius": 0.75,
+        "height": 1.2,
+        "material": "aluminium",
+        "memberArea": 0.0006,
+        "mass": 1200
+      }
+    }
+  ],
+  "joins": [
+    {
+      "child": "tank0",
+      "childPort": "bottom",
+      "parent": "engine",
+      "parentPort": "top",
+      "clock": 0
+    },
+    {
+      "child": "tank1",
+      "childPort": "bottom",
+      "parent": "tank0",
+      "parentPort": "top",
+      "clock": 0
+    },
+    {
+      "child": "tank2",
+      "childPort": "bottom",
+      "parent": "tank1",
+      "parentPort": "top",
+      "clock": 0
+    },
+    {
+      "child": "tank3",
+      "childPort": "bottom",
+      "parent": "tank2",
+      "parentPort": "top",
+      "clock": 0
+    },
+    {
+      "child": "tank4",
+      "childPort": "bottom",
+      "parent": "tank3",
+      "parentPort": "top",
+      "clock": 0
+    },
+    {
+      "child": "pod",
+      "childPort": "bottom",
+      "parent": "tank4",
+      "parentPort": "top",
+      "clock": 0
+    }
+  ]
+}

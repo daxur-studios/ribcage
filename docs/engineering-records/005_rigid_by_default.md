@@ -532,3 +532,41 @@ Suites: `cargo test` 144 passed, `pnpm test` 251 passed, `pnpm typecheck` clean.
 - 5.12 (the page): read `rc_vessel_nodes` and colour or label by vessel; the split event gives the step and the segments for a "stage separated" or "leg lost" notice.
 - 5.13: the torn-segment rule keeps a broken leg live forever. With many wrecks lying about that costs substeps; a later phase could re-segment a torn segment into its pieces so each can sleep.
 - **[oracle-candidate]** Is "majority of mass" the right owner for a segment cut inside, or should a cut segment be split into new segments at the cut, so that each piece can sleep and carry its own estimate?
+
+## 2026-11-19 (phase 5.11: the tall rocket)
+
+Built `test/fixtures/tall-rocket.craft.json` (engine, five tanks, pod, from the existing generators only), `src/tall-rocket.ts` (scenario and measurements) and `test/tall-rocket.test.ts`. No change to `core/`. The rocket is 147 nodes, 808 beams, 17 segments, 7000 kg exactly (the sum of its parts), 15 m tall, with 160 kN of thrust against a 69 kN weight. Budgets: 13 substeps (cap 24), node-mass ratio 3.06 (cap 10). The clamp is the engine's lowest ring pinned with `setInvMass(n, 0)`; no helper was needed. Scenario: stand 10 s, full thrust 10 s, a 30 kN side knock for 0.2 s on the middle tank's middle ring, engine cut at step 1500, end at step 2100.
+
+### Decisions
+
+- **Knock 30 kN.** A sweep showed 30 kN is the largest round figure that yields no beam in either run; 40 kN yields one or two. The rocket must not break for the two runs to be comparable.
+- **Radius 1.25 m, wall area 0.0008 m², member area 0.0006 m².** The first design (0.75 m radius, 3 m tanks) was unstable: with no knock and no thrust the tip drift grew from rounding noise and the engine beams yielded by step ~1950, all-live and sleeping alike. A stiffer wall collapsed faster. Radius 1.5 m was stable, 1.0 m not, so the limit is slenderness (a very slender stack buckles), not sleeping. 15 m by 2.5 m is as tall as this stays stable.
+- **Tolerances.** Standing and thrust: sleeping must be no worse than all-live on tip excursion, tip range and stack-length range, and use fewer substeps. Knock and settle: sleeping within 1.5 times all-live (measured 1.02 to 1.08). Switch checks 1e-12. The same run twice gives the same hash.
+
+### Measured (all-live / sleeping on, per phase)
+
+| phase | substeps per step | ms per step | stack length range | tip max | tip range | bodies |
+|---|---|---|---|---|---|---|
+| standing | 11.0 / 6.0 | 0.96 / 0.29 | 0.08 / 0.00 mm | 2.33 / 1.67 mm | 2.08 / 0.48 mm | 2 / 1-2 |
+| thrust | 11.0 / 4.7 | 0.96 / 0.20 | 0.02 / 0.00 mm | 6.15 / 1.16 mm | 4.26 / 0.32 mm | 2 / 1-2 |
+| knock | 11.0 / 11.0 | 0.96 / 0.98 | 4.12 / 4.50 mm | 289 / 296 mm | 189 / 196 mm | 2 / 2 |
+| settle | 11.0 / 11.0 | 0.97 / 0.96 | 46 / 52 mm | 871 / 899 mm | 544 / 586 mm | 2 / 2 |
+
+Sleeping on: the whole stack is one body from step 180; 31 wakes, 32 sleeps; every switch kept momentum to 1.5e-17 and spin to 1e-17, with no energy added (wake energy 1e-23, relative). No beam yielded or broke in either run, and the rocket stays one vessel.
+
+### Findings
+
+- **Sleeping is much better standing and under thrust:** wobble sideways four to thirteen times smaller, the stack length steady, and half or less the substeps and time.
+- **A knock wakes the whole craft and it does not sleep again.** After the knock the rocket sways 0.2 to 0.9 m (low damping), the whole of it awake (two bodies, the pod and engine, as all-live; nothing asleep) through the 10 s of settle. A 7200-step run (120 s) did not return to sleep either, and by then both runs had yielded the same 19 to 42 beams from the sway. So the plan's "settle back to sleep" is not met: the wake is by the throttle step (over 0.1) and the force command, both of which wake the whole craft, and the sway is too big to sleep after. Owner decision, not fixed here.
+- **Under the knock and the settle sleeping is slightly worse than all-live** (tip 296 against 289 mm, 899 against 871 mm; about 2 to 8%), as it is on the hop. The cause is the per-island substep rule: the substep count changes when segments join or leave a body, and the jolt shows as a small difference rather than a gain. Not changed; `core/src/sleep.rs` thresholds untouched.
+- **Slenderness limit** as above. A tall thin rocket needs a thicker wall or fewer tanks, or the beams buckle.
+
+### Not checked
+
+- Not run on the page; no demo (5.12). Not run with the rocket free (no clamp) or lifting off. Not checked with other counts of tanks or ring nodes. No run beyond 120 s apart from the one 7200-step probe, which was not committed. The goldens (all-live hop `0xd92f2aad01c0e048`, rigid hop `0x8e49fe2d420d03e2`, weak-bridge, tower-collapse, hard-landing) replay in their existing tests, which pass; this phase did not re-assert them.
+
+### For 5.12 and 5.13
+
+- 5.12: `runTallRocket` gives the series (`bodies` and `asleep` every 30 steps) for a panel; the knock is `tallRocketCommands`. Show the all-live and sleeping tips side by side; the knock is the interesting scene, the sway is large.
+- 5.13: if the rocket should settle to sleep after a knock, the wake rule needs to wake only the knocked segments, and a quieter threshold after a large sway.
+- **[oracle-candidate]** Should a throttle step or a commanded force wake the whole craft, or only the segments it acts on? Waking all prevents any re-sleep here.
