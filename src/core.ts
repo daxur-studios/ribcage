@@ -210,6 +210,8 @@ export const WAKE_JOINT = 4;
 export const WAKE_ESTIMATE = 5;
 export const WAKE_NEIGHBOUR = 6;
 export const WAKE_OFF = 7;
+/** An applied force on one of its nodes changed by more than the node's weight. */
+export const WAKE_FORCE = 8;
 
 /** One switch pass of the last step (`sleep::SwitchCheck`): totals before and after. */
 export interface SwitchCheck {

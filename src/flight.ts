@@ -56,6 +56,12 @@ export interface FlightOptions {
   rigid?: boolean;
   /** Send the segment commands (default: the same as `rigid`). `rigid` needs them. */
   segments?: boolean;
+  /**
+   * Let barely loaded segments sleep (`CMD_SET_SLEEPING`, plan 005, phase 5.8). Default: the
+   * same as `rigid`, from phase 5.9, where the equivalence test (`test/equivalence.test.ts`)
+   * showed it tells the same story as all-live. Needs the segment commands; ignored without them.
+   */
+  sleeping?: boolean;
 }
 
 /** Loads a craft file and builds its setup on the landing field. Throws what `loadCraft` throws. */
@@ -64,7 +70,9 @@ export function prepareFlight(craftText: string, field: Terrain = landingField()
   const setup = new CommandBatch();
   compileTerrain(setup, field);
   const rigid = options.rigid ?? true;
-  const segmentOf = compileCraft(setup, loaded.craft, { segments: options.segments ?? rigid, rigid });
+  const segments = options.segments ?? rigid;
+  const segmentOf = compileCraft(setup, loaded.craft, { segments, rigid });
+  if (segments && (options.sleeping ?? rigid)) setup.setSleeping(true);
   return { loaded, field, setup, thrusterCount: loaded.craft.thrusters.length, segmentOf };
 }
 

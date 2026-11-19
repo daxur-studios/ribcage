@@ -10,7 +10,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 import { CommandBatch } from "../src/commands.ts";
-import { Core, EVENT_SLEEP, EVENT_WAKE, EVENT_YIELD, WAKE_CONTACT, type SwitchCheck } from "../src/core.ts";
+import { Core, EVENT_SLEEP, EVENT_WAKE, EVENT_YIELD, WAKE_NEIGHBOUR, WAKE_THRUST, type SwitchCheck } from "../src/core.ts";
 import { HOP_STEPS, hopCommands, PAD, partNodes, prepareDrop, prepareHop } from "../src/landing.ts";
 import { World } from "../src/world.ts";
 
@@ -19,6 +19,13 @@ const HOPPER = readFileSync(new URL("./fixtures/hopper.craft.json", import.meta.
 const loadCore = async (): Promise<Core> => Core.load(new Uint8Array(readFileSync(WASM_PATH)));
 /** `sleep::MIN_LIVE_STEPS` and `sleep::QUIET_STEPS`: a wake is followed by at least this many live steps. */
 const MIN_CYCLE = 60;
+/**
+ * The shortest wake-to-sleep gap in step numbers: a wake before the solve (a contact, a throttle or
+ * a force jump, phase 5.9) makes its own step live, so 60 live steps can span 59 step numbers.
+ */
+const MIN_GAP = MIN_CYCLE - 1;
+/** The setups here leave sleeping off (the flight default turns it on from phase 5.9); each test switches it itself. */
+const MANUAL = { sleeping: false };
 /** The hopper's legs are segments 6 to 9 (tank 0 to 3, pod 4, engine 5). */
 const LEGS = [6, 7, 8, 9];
 const TEN_MINUTES = 36000;
@@ -95,12 +102,12 @@ function shortestCycle(r: Run): number {
 }
 
 test("every switch keeps momentum and spin and adds no energy: standing, the hop and the drops", async (t) => {
-  const hop = prepareHop(HOPPER);
+  const hop = prepareHop(HOPPER, MANUAL);
   const runs: [string, Run][] = [
-    ["standing", await run(prepareDrop(HOPPER, PAD, 0).setup, 600, () => {})],
+    ["standing", await run(prepareDrop(HOPPER, PAD, 0, undefined, MANUAL).setup, 600, () => {})],
     ["hop", await run(hop.flight.setup, HOP_STEPS, (b, s) => hopCommands(b, hop, s))],
-    ["drop 3 m/s", await run(prepareDrop(HOPPER, PAD, 3).setup, 600, () => {})],
-    ["drop 7 m/s", await run(prepareDrop(HOPPER, PAD, 7).setup, 600, () => {})],
+    ["drop 3 m/s", await run(prepareDrop(HOPPER, PAD, 3, undefined, MANUAL).setup, 600, () => {})],
+    ["drop 7 m/s", await run(prepareDrop(HOPPER, PAD, 7, undefined, MANUAL).setup, 600, () => {})],
   ];
   let total = 0;
   for (const [name, r] of runs) {
@@ -112,7 +119,7 @@ test("every switch keeps momentum and spin and adds no energy: standing, the hop
     assert.ok(w.dl <= 1e-12, `${name}: spin off by ${w.dl}`);
     assert.ok(w.sleepUp <= 1e-12, `${name}: a sleep added energy (${w.sleepUp})`);
     assert.ok(w.wakeChange <= 1e-12, `${name}: a wake changed energy (${w.wakeChange})`);
-    assert.ok(shortestCycle(r) >= MIN_CYCLE, `${name}: a segment slept ${shortestCycle(r)} steps after waking`);
+    assert.ok(shortestCycle(r) >= MIN_GAP, `${name}: a segment slept ${shortestCycle(r)} steps after waking`);
   }
   // The hop goes through every kind of switch: sleeps in powered flight, wakes on thrust and contact.
   const h = runs[1]![1];
@@ -122,7 +129,7 @@ test("every switch keeps momentum and spin and adds no energy: standing, the hop
 });
 
 test("the hopper standing on the pad sleeps whole: one body, fewer substeps", async (t) => {
-  const setup = () => prepareDrop(HOPPER, PAD, 0).setup;
+  const setup = () => prepareDrop(HOPPER, PAD, 0, undefined, MANUAL).setup;
   const on = await run(setup(), 600, () => {}, true, true);
   const off = await run(setup(), 600, () => {}, false);
   const sl = on.world.sleep();
@@ -139,27 +146,26 @@ test("the hopper standing on the pad sleeps whole: one body, fewer substeps", as
   on.world.free();
 });
 
-test("the legs asleep in flight wake on contact before the touchdown's first yield", async (t) => {
-  const hop = prepareHop(HOPPER);
+test("the legs asleep in powered flight wake at the engine cut and are live for the touchdown", async (t) => {
+  // From phase 5.9 a large throttle change wakes the whole craft (ER 005): legs left asleep through
+  // the cut kept their loaded shape and crushed differently. The coast is too short to sleep again.
+  const hop = prepareHop(HOPPER, MANUAL);
   const on = await run(hop.flight.setup, HOP_STEPS, (b, s) => hopCommands(b, hop, s));
   const off = await run(hop.flight.setup, HOP_STEPS, (b, s) => hopCommands(b, hop, s), false);
-  const asleepBefore = LEGS.filter((leg) => {
-    const sl = on.sleeps.filter((s) => s.segment === leg && s.step < 260).at(-1);
-    const wk = on.wakes.filter((w) => w.segment === leg && w.step < 260).at(-1);
-    return sl !== undefined && (wk === undefined || wk.step < sl.step);
-  });
-  const contact = on.wakes.filter((w) => LEGS.includes(w.segment) && w.step >= 260);
-  const firstWake = Math.min(...contact.map((w) => w.step));
-  t.diagnostic(`legs asleep before touchdown: ${asleepBefore.join(" ")}; wakes ${contact.map((w) => `${w.segment}@${w.step} (reason ${w.reason})`).join(", ")}; first yield ${on.firstYield} (sleeping off: ${off.firstYield})`);
-  assert.equal(asleepBefore.length, 4, "all four legs slept in flight");
-  assert.ok(contact.some((w) => w.reason === WAKE_CONTACT), "a foot's contact wakes them");
-  assert.ok(firstWake <= on.firstYield, `woke at ${firstWake}, first yield at ${on.firstYield}`);
+  const sleptPowered = LEGS.filter((leg) => on.sleeps.some((s) => s.segment === leg && s.step > 24 && s.step < 220));
+  const cut = on.wakes.filter((w) => LEGS.includes(w.segment) && w.step === 220);
+  const resleep = on.sleeps.filter((s) => LEGS.includes(s.segment) && s.step >= 220 && s.step <= on.firstYield);
+  t.diagnostic(`legs asleep in powered flight: ${sleptPowered.join(" ")}; woken at the cut: ${cut.map((w) => `${w.segment} (reason ${w.reason})`).join(", ")}; first yield ${on.firstYield} (sleeping off: ${off.firstYield})`);
+  assert.equal(sleptPowered.length, 4, "all four legs slept in powered flight");
+  assert.equal(cut.length, 4, "the engine cut wakes all four");
+  assert.ok(cut.every((w) => w.reason === WAKE_THRUST || w.reason === WAKE_NEIGHBOUR), "woken by the throttle");
+  assert.equal(resleep.length, 0, "no leg sleeps again before the touchdown");
   assert.equal(on.firstYield, off.firstYield, "the touchdown starts on the same step");
 });
 
 test("ten simulated minutes near the thresholds: no energy gained, no switch faster than allowed", async (t) => {
   // Standing: the legs read 98% of the sleep level for ten minutes.
-  const stand = prepareDrop(HOPPER, PAD, 0);
+  const stand = prepareDrop(HOPPER, PAD, 0, undefined, MANUAL);
   const speeds = (w: World, prev: Float64Array) => {
     const p = w.positions();
     let sum = 0;
@@ -192,21 +198,21 @@ test("ten simulated minutes near the thresholds: no energy gained, no switch fas
   // on for 2.5 s and off for 2.5 s. Ten minutes with RIBCAGE_SLOW, two otherwise.
   const steps = process.env.RIBCAGE_SLOW ? TEN_MINUTES : 7200;
   const nodes = partNodes(stand.loaded.craft, "pod");
-  const cycled = await run(prepareDrop(HOPPER, PAD, 0).setup, steps, (b, s, mass) => {
+  const cycled = await run(prepareDrop(HOPPER, PAD, 0, undefined, MANUAL).setup, steps, (b, s, mass) => {
     if (s >= 600 && Math.floor(s / 150) % 2 === 0) for (const n of nodes) b.addForce(n, 0, (-0.3 * 9.81 * mass) / nodes.length, 0);
   });
   const w = worstSwitch(cycled);
   const cycle = shortestCycle(cycled);
   t.diagnostic(`cycled load, ${steps / 3600} min: ${cycled.wakes.length} wakes, ${cycled.sleeps.length} sleeps, shortest wake-to-sleep ${cycle} steps; worst energy on sleep ${w.sleepUp.toExponential(1)}, on wake ${w.wakeChange.toExponential(1)}`);
   assert.ok(cycled.wakes.length > 0 && cycled.sleeps.length > 0, "the load switches it");
-  assert.ok(cycle >= MIN_CYCLE, `slept ${cycle} steps after waking`);
+  assert.ok(cycle >= MIN_GAP, `slept ${cycle} steps after waking`);
   assert.ok(w.sleepUp <= 1e-12 && w.wakeChange <= 1e-12, "no energy from a switch");
   // At most one sleep per segment per minimum cycle.
   assert.ok(cycled.sleeps.length <= (10 * steps) / MIN_CYCLE);
 });
 
 test("the same hop with sleeping twice gives the same hash", async () => {
-  const hop = prepareHop(HOPPER);
+  const hop = prepareHop(HOPPER, MANUAL);
   const hash = async () => {
     const r = await run(hop.flight.setup, HOP_STEPS, (b, s) => hopCommands(b, hop, s), true, true);
     const h = r.world.stateHash;

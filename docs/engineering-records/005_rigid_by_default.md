@@ -428,3 +428,58 @@ Built by Opus. `cargo test --release` 140 passed, 5 ignored; `pnpm test` 245 pas
 - Tune the four thresholds, the closing speed and the wake damping against the equivalence test, not against this phase's numbers.
 - Decide whether the post-landing locked-in readings (0.39 to 0.46) should let a damaged craft sleep (a sleep level over the locked-in value, or the residual-λ idea above).
 - The settle window (10 steps) and the 1.25 margin on the estimate are the first knobs if a sleeping craft wakes falsely or late.
+
+
+## 2026-11-19 (phase 5.9: equivalence and tuning)
+
+Built by Opus. `cargo test` 140 passed, 5 ignored; `pnpm test` 246 passed; `pnpm typecheck` clean. The pre-sleep goldens replay with sleeping off (weak-bridge at ABI 2, tower-collapse at 3, hard-landing at 4), the all-live hop ends at 0xd92f2aad01c0e048 at step 1320, and the 4.8 bands pass with sleeping on. No ABI change (still 9).
+
+### As built
+
+- **[decision]** `src/equivalence.ts` builds 16 scenes and `test/equivalence.test.ts` runs each twice, sleeping on and all-live (40 s). The scenes are the 4.8 drops at 2, 3 and 7 m/s (2 m/s on the pad only, 3 and 7 on the pad and the five rough spots), full throttle, the scripted hop, and a 70 kN side push on the tank for 0.1 s (`KNOCK_FORCE`: 70 kN yields about ten beams and the craft stands, 85 kN breaks some and tips it, 100 kN knocks it over).
+- **[decision]** Tolerances, from the scenes' own chaos: moving the all-live 7 m/s rough drop 0.1 to 1 mm sideways already changes up to 2 breaks and 3 yields; the hop is steadier (a 1 to 1000 N push at step 240 changes at most 1 break). So the crash scenes (the hop and 7 m/s on a rough spot) may differ by 2 breaks and 6 extra yields. Every other scene must break and yield the same set exactly. Everywhere: the same legs lost and the tilt at rest within 2°, every switch keeping momentum and spin to 1e-12 with no energy added, and at least one sleep.
+- **[decision]** `WAKE_LEVEL` 0.25 → 0.30 and `SLEEP_LEVEL` 0.20 → 0.25. After the knock the legs read about 0.21 and never slept, and the tank's segment 0 kept waking through its neighbour. With the new levels the knocked craft sleeps (standing 11.6 substeps against 19).
+- **[decision]** `WAKE_DAMP_BOOST` 4 → 0. The extra damping damped the impact that caused the wake: the hop's legs crushed differently. The code is kept for later tuning.
+- **[decision]** New wake rules, all tested before the solve:
+  - a contact trigger wakes every segment of its body, not only its tree neighbours;
+  - a contact closing faster than 1 m/s (`CRASH_WAKE_SPEED`) wakes the whole craft over its seams, broken or not. A stress wave crosses a few metres of structure in about a millisecond, so the whole craft is loaded within the step;
+  - a throttle step over 0.1 (`THROTTLE_CRAFT_WAKE`) wakes the whole craft. The legs had slept under thrust and kept that loaded shape through the engine cut at step 220. This was the hop's main gap: it closed from 8 breaks and 8 extra yields to 1 and 5;
+  - a commanded force on a node that changes by more than the node's weight wakes its body (`WAKE_FORCE` = 8, a new reason). At 70 kN the legs had stayed asleep 3 to 4 steps into the knock and yielded 10 against 6. With the force wake, 9 yield against 10 and nothing breaks.
+  The commanded force at the last check per node (`Sleep.pushed`) is in the state hash.
+- **[decision]** A damaged craft does not sleep. There is no special rule: its yielded beams lock in 0.39 to 0.46 of yield, over `SLEEP_LEVEL`, so it stays live. A sleep ceiling of 0.5 for damaged segments was tried. It made them chatter at rest (sleep, wake, sleep), and each switch changes the island's substep count, so the live legs jolted: a 3 m/s rough-b leg moved at 0.67 m/s at the end and the 4.8 bands failed. Removed.
+- **[decision]** Unchanged after trying them in the equivalence test: `QUIET_CHANGE` 0.005, `QUIET_STEPS` 60, `MIN_LIVE_STEPS` 30, `CONTACT_WAKE_SPEED` 0.25 m/s, `SETTLE_STEPS` 10, `ESTIMATE_MARGIN` 1.25. None of them moved a break or a leg.
+- **[decision]** Sleeping is on by default in the flight scenarios: `prepareFlight` sends `CMD_SET_SLEEPING` whenever it sends the segment commands, unless `sleeping: false`. The core's own default stays off, so the old recordings replay unchanged.
+- **[decision]** `hard-landing-rigid.rcrd` was re-recorded on purpose with sleeping on (106940 bytes, ABI 9). The rigid hop's hash moves from 0x5a1c383b76d89ea6 (5.4 to 5.8, sleeping off) to **0xa08c8113b3a581c7**. The 5.8 sleeping-on value 0xc2f0d492f949c2f3 is gone because the rules changed. The estimate tests keep the sleeping-off rigid hop (0x5a1c383b76d89ea6), since they compare the estimate against the measurement.
+- **[decision]** Tests adapted to the default. `test/sleep.test.ts` builds its setups with sleeping off and switches it itself. The 5.8 test "legs asleep in flight wake on contact" is now "wake at the engine cut and are live for the touchdown", since the throttle rule wakes them at step 220 and the coast is too short to sleep again. The first yield is at step 267 either way. The cycle check allows 59 step numbers: a wake before the solve makes its own step live. `test/rigid.test.ts` checks the two spawn bodies with sleeping off, and `test/flight.test.ts` expects the sleeping record last.
+
+### Measured
+
+Off/on, substeps and ms per step:
+
+| Scene | Breaks | Yields (+extra −missed) | Legs lost | Tilt | Notes |
+| --- | --- | --- | --- | --- | --- |
+| 2 and 3 m/s, pad | 0/0 | 0/0 | none | 0.0° | rest 19/7–7.9 substeps, 2.6/0.4 ms |
+| 3 m/s, rough a–e | 0/0 | 1–6, identical sets | none | within 0.3° | rest stays near 19; ms down 0–30% |
+| 7 m/s, pad | 24/24 | 56/56 | none | 0.3/0.0° | rest 19/13.4 substeps |
+| 7 m/s, rough a–e | 34–41, worst differs by 1 (rough-b) | worst +1 (rough-e) | the same pair each | within 0.4° | rest 17–19 substeps |
+| Full throttle | 0/0 | 0/0 | none | 0.6/0.3° | thrust 19/7.5 substeps, 1.76/0.38 ms |
+| Hop | 40/41 (differs by 1) | 76/75 (+5 −6) | legs 6 and 9 both runs | 102.5/102.3° | thrust 19/15.5 substeps, 1.98/1.18 ms; coast, touchdown and rest 19/19 |
+| Side knock | 0/0 | 10/9 (+0 −1) | none | 1.5/1.6° | standing 19/11.6 substeps, 2.10/0.62 ms; knock and rest 19/19 |
+
+- **[finding]** Every switch in every scene keeps momentum and spin to 1e-12 relative, no sleep adds energy and no wake changes it.
+- **[finding]** The saving is in quiet phases: standing, thrust, and a clean pad landing at rest. A rough-ground landing pays nearly full price at rest, because some leg stays loaded over the sleep level.
+- **[finding]** `SLEEP_SCENE_200` (the ffi body scene) moved from 0x8fb3e3c32250148b to 0x5b2faa52304df2bb because of the `pushed` hash field and the wider wakes. It is checked natively and in WebAssembly.
+
+### Not checked
+
+- **[assumption]** Only the hopper. The tolerances are stated against its chaos; another craft may need its own.
+- **[assumption]** The ms numbers are one run on one machine, so they are noisy (a few phases show sleeping on slower by 0.1 to 0.5 ms with the same substep count).
+- **[finding]** The 5.8 contact wake ("asleep legs wake on contact before the first yield") is no longer covered by a hop test, because the legs are awake at touchdown. The rough drops exercise contact wakes (rough-a: 15 wakes), but no test asserts that the wake comes before the first yield there.
+- **[assumption]** Not run on the page.
+- The all-live rover not resting is 5.6's finding and is untouched.
+
+### For 5.10 and 5.11
+
+- **[finding]** The root of the wreck chatter: the substep count is per island and set by its stiffest live beam, and it changes when segments join or leave a body. A live segment's settled sag depends on that count, so every switch jolts its live neighbours. A per-segment (or per-live-part) count, or holding the count across a switch, would let damaged and partly loaded craft sleep. That matters for 5.11's tall rocket, which will be partly asleep most of the time.
+- **[oracle-candidate]** Can the substep count of a mixed rigid/live island be held, or chosen per live part, without breaking determinism or the 4.8 bands? This would let switches stop changing the live segments' settled shape.
+- 5.10 splits a body cut by a break. The crash rule (wake the whole craft over seams, broken or not) means a split always happens awake in the hopper scenes, so test a split of a sleeping body directly.

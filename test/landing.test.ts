@@ -28,7 +28,8 @@ const HOPPER = readFileSync(new URL("./fixtures/hopper.craft.json", import.meta.
 const FIXTURE = new URL("./fixtures/hard-landing.rcrd", import.meta.url);
 /** The same hop with the engine and pod rigid (plan 005, phase 5.4), recorded on purpose. */
 const RIGID_FIXTURE = new URL("./fixtures/hard-landing-rigid.rcrd", import.meta.url);
-const RIGID_HOP_HASH = 0x5a1c383b76d89ea6n;
+/** Re-recorded with sleeping on, the flight default from plan 005, phase 5.9 (was 0x5a1c383b76d89ea6 sleeping off). */
+const RIGID_HOP_HASH = 0xa08c8113b3a581c7n;
 
 async function loadCore(): Promise<Core> {
   return Core.load(new Uint8Array(readFileSync(WASM_PATH)));
@@ -259,7 +260,8 @@ test("the committed all-live hard landing replays to its hash, and recording it 
 test("the committed rigid hard landing replays to its hash, and recording it again gives the same file", async () => {
   const core = await loadCore();
   const { bytes: fresh, hash } = recordHop(core, true);
-  // Recorded on purpose (plan 005, phase 5.4): run once with RIBCAGE_UPDATE_RIGID_FIXTURE=1.
+  // Recorded on purpose (plan 005, phase 5.4; again with sleeping on in 5.9): run once with
+  // RIBCAGE_UPDATE_RIGID_FIXTURE=1.
   if (process.env.RIBCAGE_UPDATE_RIGID_FIXTURE) writeFileSync(RIGID_FIXTURE, fresh);
   assert.ok(existsSync(RIGID_FIXTURE), "fixture missing: run once with RIBCAGE_UPDATE_RIGID_FIXTURE=1");
   const stored = new Uint8Array(readFileSync(RIGID_FIXTURE));
@@ -269,9 +271,6 @@ test("the committed rigid hard landing replays to its hash, and recording it aga
   assert.equal(result.ok, true);
   assert.equal(result.steps, HOP_STEPS);
   assert.equal(result.hash, RIGID_HOP_HASH);
-  // Same bytes except the ABI field: the stored file was made at ABI 6, before the joint
-  // commands (ABI 7 only added command kinds), and replaying it above is the real check.
-  const atStoredAbi = fresh.slice();
-  atStoredAbi.set(stored.subarray(8, 12), 8);
-  assert.deepEqual(atStoredAbi, stored);
+  // Same bytes: the stored file was made at this ABI (9, phase 5.9).
+  assert.deepEqual(fresh, stored);
 });

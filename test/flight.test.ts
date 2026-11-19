@@ -153,12 +153,13 @@ test("the setup sends the thruster to the core, and the core accepts every recor
   assert.equal(world.nodeCount, live.loaded.craft.nodes.length);
   world.free();
   // Rigid (the default): the setup ends with one make-rigid per never-live segment, each result
-  // the body's slot (its own segment: the engine is 4, the pod 5), and nothing is rejected.
+  // the body's slot (its own segment: the engine is 4, the pod 5), then sleeping on (phase 5.9),
+  // and nothing is rejected.
   const rigid = prepareFlight(HOPPER_TEXT);
   const world2 = new World(core);
   const r2 = world2.apply(rigid.setup);
   assert.equal(r2.rejected, 0);
-  assert.deepEqual([...r2.results.slice(-2)], [4, 5]);
+  assert.deepEqual([...r2.results.slice(-3)], [4, 5, 1]);
   assert.equal(world2.bodies().flags.filter((f) => f !== 0).length, 2);
   world2.free();
 });

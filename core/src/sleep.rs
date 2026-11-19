@@ -1,8 +1,8 @@
 //! Sleep and wake (plan 005, phase 5.8). A segment that has carried little and steady load for a
 //! while goes to sleep: it becomes rigid, and touching rigid segments are one body. A sleeping
 //! segment wakes on a trigger or when the stress estimate (phase 5.7) reads it near its wake
-//! level. Off by default; `CMD_SET_SLEEPING` turns it on. With it off nothing here runs and no
-//! hash changes.
+//! level. Off in the core; `CMD_SET_SLEEPING` turns it on, and the flight scenarios send it by
+//! default from phase 5.9. With it off nothing here runs and no hash changes.
 //!
 //! **Readings.** Each step, after the estimate, every segment gets one load reading as a fraction
 //! of yield: a live segment's is *measured*, the worst `|last_lambda| / F_yield` over the solved
@@ -18,14 +18,19 @@
 //! **Sleep.** A live segment that is allowed to sleep ([`World::sleep_eligible`]), has been live
 //! at least [`MIN_LIVE_STEPS`], and has read under [`SLEEP_LEVEL`] and changed by no more than
 //! [`QUIET_CHANGE`] per step for [`QUIET_STEPS`] steps in a row goes to sleep at the end of the
-//! step.
+//! step. There is no exception for damage: a wreck's yielded beams lock in stress (the hopper's
+//! legs read 0.39 to 0.46 of yield after a hard landing), so it stays live. Letting it sleep under
+//! a higher ceiling made it chatter (ER 005, 5.9).
 //!
 //! **Wake.** Before the solve (brief trap 2: the estimate lags a step): a node of a segment that
 //! comes within contact range of the ground, a node already in range that closes on it faster
-//! than [`CONTACT_WAKE_SPEED`], or a thruster on it whose throttle changed. After the step: a
-//! joint on it that moved, or a reading at or over [`WAKE_LEVEL`]. Each trigger wakes the
-//! segment it is on and that segment's neighbours in the assembly tree (both sides of each seam),
-//! whether the triggering segment is live, asleep or never-live; only sleeping segments change.
+//! than [`CONTACT_WAKE_SPEED`], a thruster on it whose throttle changed, or an applied force on
+//! one of its nodes that changed by more than the node's weight. After the step: a joint on it that
+//! moved, or a reading at or over [`WAKE_LEVEL`]. Each trigger wakes the segment it is on and that
+//! segment's neighbours in the assembly tree (both sides of each seam), whether the triggering
+//! segment is live, asleep or never-live; only sleeping segments change. Wider, from phase 5.9: a
+//! contact or force trigger wakes every segment of its body; a contact closing faster than
+//! [`CRASH_WAKE_SPEED`] or a throttle step over [`THROTTLE_CRAFT_WAKE`] wakes the whole craft.
 //!
 //! **Bodies.** On any pass that switched something, the bodies are recomputed by a union-find
 //! over segments: two rigid segments are joined when an unbroken beam has one end in each, and
@@ -37,8 +42,10 @@
 //!
 //! **Wake damping.** A just-woken segment's beams solve with their damping scaled by
 //! `1 + WAKE_DAMP_BOOST · left / WAKE_DAMP_STEPS`, `left` counting down from [`WAKE_DAMP_STEPS`].
+//! The boost is zero from phase 5.9, so this is kept for later tuning only.
 //!
-//! Every value here is an **[assumption]** from the brief, tuned in phase 5.9. Deterministic maths
+//! Every value here started as an **[assumption]** from the brief. Phase 5.9 tuned them against
+//! the equivalence test (`test/equivalence.test.ts`) and nothing else (ER 005). Deterministic maths
 //! only (`+ - * /`, `sqrt`), every loop in ascending index order.
 
 use crate::body::NO_BODY;
@@ -49,12 +56,13 @@ use crate::sim::gravity_at;
 use crate::world::{World, BEAM_ALIVE, BEAM_BROKEN, NODE_ALIVE, NODE_FROZEN};
 use crate::STEP_SECONDS;
 
-/// Wake when a reading reaches this fraction of yield (brief: 25%).
-pub const WAKE_LEVEL: Real = 0.25;
+/// Wake when a reading reaches this fraction of yield (brief: 25%; 5.8 used 25%). 30% from phase
+/// 5.9: after a side knock the legs read about 21% and never slept at 20/25 (ER 005).
+pub const WAKE_LEVEL: Real = 0.30;
 /// Sleep only while the reading stays under this fraction of yield. The brief said 8%; the hopper's
-/// legs carry 19.4% of yield standing, so at 8% a craft at rest never sleeps (ER 005, 5.8). 20% is
-/// four fifths of the wake level: a sleeping segment wakes once its load rises by a fifth.
-pub const SLEEP_LEVEL: Real = 0.20;
+/// legs carry 19.4% of yield standing, so at 8% a craft at rest never sleeps (ER 005, 5.8). 25% from
+/// 5.9 (was 20%) lets a knocked craft sleep; the wake level stays one fifth above it.
+pub const SLEEP_LEVEL: Real = 0.25;
 /// "Nearly unchanging": the reading moves by no more than this fraction of yield per step.
 pub const QUIET_CHANGE: Real = 0.005;
 /// Quiet steps in a row before a sleep (brief: 60).
@@ -63,8 +71,11 @@ pub const QUIET_STEPS: u32 = 60;
 pub const MIN_LIVE_STEPS: u32 = 30;
 /// Steps of extra damping after a wake (brief: about 10).
 pub const WAKE_DAMP_STEPS: u32 = 10;
-/// Extra damping on the first step after a wake, as a multiple of the beam's own.
-pub const WAKE_DAMP_BOOST: Real = 4.0;
+/// Extra damping on the first step after a wake, as a multiple of the beam's own. The brief's 4
+/// damped the impact that caused the wake: the hopper's legs woke two steps before touchdown and
+/// crushed differently than all-live (ER 005, 5.9). Zero: a wake changes nothing in the solve.
+pub const WAKE_DAMP_BOOST: Real = 0.0;
+
 /// The estimate reads a rigid segment up to 20% low at peaks (ER 005, 5.7): scaled by this.
 pub const ESTIMATE_MARGIN: Real = 1.25;
 /// Steps after a body change in which a sleeping segment's estimate only recalibrates. The hopper's
@@ -74,6 +85,14 @@ pub const SETTLE_STEPS: u32 = 10;
 /// the solve (a contact force jump the estimate would see a step late). A resting node's speed at
 /// the start of a step is near zero; one step of gravity is 0.16 m/s.
 pub const CONTACT_WAKE_SPEED: Real = 0.25;
+/// A contact trigger closing faster than this, m/s, is a crash: it wakes every segment of the
+/// craft, not only its own body and neighbours (ER 005, 5.9). The hopper's legs crush from about
+/// 2 m/s; a node settling at rest closes at well under one step of gravity (0.16 m/s).
+pub const CRASH_WAKE_SPEED: Real = 1.0;
+/// A throttle step bigger than this changes the inertial load on every segment of the craft at
+/// once, so it wakes all of them: the hopper's legs slept under thrust, kept that loaded shape
+/// through the engine cut and released it at touchdown (ER 005, 5.9).
+pub const THROTTLE_CRAFT_WAKE: Real = 0.1;
 
 /// Wake reasons, the `value` of a wake event.
 pub const WAKE_CONTACT: u32 = 1;
@@ -84,6 +103,8 @@ pub const WAKE_ESTIMATE: u32 = 5;
 pub const WAKE_NEIGHBOUR: u32 = 6;
 /// Sleeping was switched off.
 pub const WAKE_OFF: u32 = 7;
+/// An applied force on one of its nodes changed by more than the node's weight.
+pub const WAKE_FORCE: u32 = 8;
 
 /// Totals of the world's movable mass before and after one switch pass: momentum, angular
 /// momentum about the origin and kinetic energy. `kind` is 1 for a wake pass, 2 for a sleep pass.
@@ -129,6 +150,8 @@ pub struct Sleep {
     pub throttle: Vec<Real>,
     /// Per node: within contact range of the ground at the last check.
     pub near: Vec<bool>,
+    /// Per node: the applied (command) force at the last check.
+    pub pushed: Vec<Vec3>,
     /// The switch passes of the last step, in order. Not hashed.
     pub checks: Vec<SwitchCheck>,
 }
@@ -174,6 +197,7 @@ impl World {
         sl.settle_left.resize(segs, 0);
         sl.throttle.resize(self.thr_throttle.len(), 0.0);
         sl.near.resize(self.pos.len(), false);
+        sl.pushed.resize(self.pos.len(), Vec3::ZERO);
     }
 
     /// Per segment: may this module put it to sleep? Not never-live, not rigid already, with
@@ -253,6 +277,42 @@ impl World {
             };
             if out[other] == 0 {
                 out[other] = WAKE_NEIGHBOUR;
+            }
+        }
+    }
+
+    /// Like [`World::sleep_spread`] for every segment of `s`'s rigid body: a body carries a contact
+    /// or force jump to all of itself in the same step, so all of it wakes (ER 005, 5.9).
+    fn sleep_spread_body(&self, s: usize, reason: u32, out: &mut [u32]) {
+        let body = self.seg_body[s];
+        for t in 0..out.len() {
+            if t == s || (body != NO_BODY && self.seg_body[t] == body) {
+                self.sleep_spread(t, reason, out);
+            }
+        }
+    }
+
+    /// Every segment joined to `s` through seams, broken or not, gets `reason`: a crash loads the
+    /// whole craft within the step (a stress wave crosses a few metres of structure in about a
+    /// millisecond), so all of it wakes before the solve (ER 005, 5.9).
+    fn sleep_spread_craft(&self, s: usize, reason: u32, out: &mut [u32]) {
+        let mut seen = vec![false; out.len()];
+        seen[s] = true;
+        let mut grew = true;
+        while grew {
+            grew = false;
+            for k in 0..self.seam_a.len() {
+                let (a, b) = (self.seam_a[k] as usize, self.seam_b[k] as usize);
+                if seen[a] != seen[b] {
+                    seen[a] = true;
+                    seen[b] = true;
+                    grew = true;
+                }
+            }
+        }
+        for t in 0..out.len() {
+            if seen[t] && out[t] == 0 {
+                out[t] = if t == s { reason } else { WAKE_NEIGHBOUR };
             }
         }
     }
@@ -414,7 +474,7 @@ impl World {
         // Contacts: the same range test as `contact::find_contacts`, from the step's start.
         if let Some(terrain) = &self.terrain {
             let dt = STEP_SECONDS;
-            let mut trig: Vec<(usize, u32)> = Vec::new();
+            let mut trig: Vec<(usize, u32, bool)> = Vec::new();
             for i in 0..self.pos.len() {
                 let s = self.node_segment[i];
                 if s == NO_SEGMENT || self.node_flags[i] & NODE_ALIVE == 0 || self.inv_mass[i] == 0.0 {
@@ -427,16 +487,26 @@ impl World {
                 let margin = v.length() * dt + 0.5 * gravity_at(p).length() * dt * dt + crate::contact::CONTACT_SKIN;
                 let near = gap < margin;
                 if self.sleep.primed && near {
-                    if !self.sleep.near[i] {
-                        trig.push((s as usize, WAKE_CONTACT));
-                    } else if -v.dot(plane.normal) > CONTACT_WAKE_SPEED {
-                        trig.push((s as usize, WAKE_IMPACT));
+                    let closing = -v.dot(plane.normal);
+                    let reason = if !self.sleep.near[i] {
+                        WAKE_CONTACT
+                    } else if closing > CONTACT_WAKE_SPEED {
+                        WAKE_IMPACT
+                    } else {
+                        0
+                    };
+                    if reason != 0 {
+                        trig.push((s as usize, reason, closing > CRASH_WAKE_SPEED));
                     }
                 }
                 self.sleep.near[i] = near;
             }
-            for (s, r) in trig {
-                self.sleep_spread(s, r, &mut wake);
+            for (s, r, crash) in trig {
+                if crash {
+                    self.sleep_spread_craft(s, r, &mut wake);
+                } else {
+                    self.sleep_spread_body(s, r, &mut wake);
+                }
             }
         }
         self.sleep.primed = true;
@@ -444,14 +514,32 @@ impl World {
         for t in 0..self.thr_throttle.len() {
             let now = self.thr_throttle[t];
             if now != self.sleep.throttle[t] {
+                let d = now - self.sleep.throttle[t];
+                let big = d > THROTTLE_CRAFT_WAKE || d < -THROTTLE_CRAFT_WAKE;
                 for n in [self.thr_tail[t], self.thr_head[t]] {
                     let s = self.node_segment[n as usize];
-                    if s != NO_SEGMENT {
+                    if s != NO_SEGMENT && big {
+                        self.sleep_spread_craft(s as usize, WAKE_THRUST, &mut wake);
+                    } else if s != NO_SEGMENT {
                         self.sleep_spread(s as usize, WAKE_THRUST, &mut wake);
                     }
                 }
             }
             self.sleep.throttle[t] = now;
+        }
+        // Applied forces (before thrust goes in, so only commands): a change bigger than the
+        // node's weight is news the estimate would see a step late, like a contact jump.
+        for i in 0..self.pos.len() {
+            let now = self.force[i];
+            let s = self.node_segment[i];
+            if s != NO_SEGMENT && self.inv_mass[i] > 0.0 && self.node_flags[i] & NODE_ALIVE != 0 {
+                let d = now - self.sleep.pushed[i];
+                let w = gravity_at(self.pos[i]).length() / self.inv_mass[i];
+                if d.dot(d) > w * w {
+                    self.sleep_spread_body(s as usize, WAKE_FORCE, &mut wake);
+                }
+            }
+            self.sleep.pushed[i] = now;
         }
         self.sleep_wake_pass(&wake, step);
     }

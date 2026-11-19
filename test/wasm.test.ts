@@ -18,7 +18,7 @@ const THRUST_SCENE_120 = 0x765d0f4475514944n;
 const BODY_SCENE_61 = 0x06024ffac786af7bn;
 const BODY_SCENE_120 = 0x722722cfee9354f3n;
 /** The body scene with sleeping on and the thrust cut before step 150, after 200 steps (core/tests/sleep.rs). */
-const SLEEP_SCENE_200 = 0x8fb3e3c32250148bn;
+const SLEEP_SCENE_200 = 0x5b2faa52304df2bbn;
 /** End hash of the reported scene after 720 steps at the default rule (`cargo run --release -p beam-core --example bench`). */
 const STANDARD_BENCH_720 = 0x871092299f3cea56n;
 

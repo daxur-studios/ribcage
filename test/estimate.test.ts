@@ -24,6 +24,7 @@ import { World } from "../src/world.ts";
 const WASM_PATH = new URL("../target/wasm32-unknown-unknown/release/beam_core.wasm", import.meta.url);
 const HOPPER = readFileSync(new URL("./fixtures/hopper.craft.json", import.meta.url), "utf8");
 const HOP_HASH = 0xd92f2aad01c0e048n;
+/** The rigid hop with sleeping off (the 5.4 to 5.8 default): the estimate is compared against the measurement here. */
 const RIGID_HOP_HASH = 0x5a1c383b76d89ea6n;
 const loadCore = async (): Promise<Core> => Core.load(new Uint8Array(readFileSync(WASM_PATH)));
 
@@ -105,7 +106,7 @@ test("turning the estimate on changes no hash: the hop, all-live and rigid", asy
   const live = prepareHop(HOPPER, { segments: true, rigid: false });
   const a = await trace(live.flight.setup, HOP_STEPS, (b, s) => hopCommands(b, live, s));
   assert.equal(a.physics, HOP_HASH, "all-live hop with segments and the estimate on");
-  const rigid = prepareHop(HOPPER);
+  const rigid = prepareHop(HOPPER, { sleeping: false });
   const r = await trace(rigid.flight.setup, HOP_STEPS, (b, s) => hopCommands(b, rigid, s));
   assert.equal(r.hash, RIGID_HOP_HASH, "rigid hop with the estimate on");
 });
@@ -130,7 +131,7 @@ test("hopper: the estimate against the measured beam stress", async (t) => {
     t.diagnostic(show(`drop ${v} m/s, all-live`, s));
     rows.push([`drop ${v}`, s]);
   }
-  const rigid = prepareHop(HOPPER);
+  const rigid = prepareHop(HOPPER, { sleeping: false });
   const rh = await trace(rigid.flight.setup, HOP_STEPS, (b, s) => hopCommands(b, rigid, s));
   const sRigid = stats(rh);
   t.diagnostic(show("hop, rigid", sRigid));

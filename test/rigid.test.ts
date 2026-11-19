@@ -55,7 +55,7 @@ function solve3(m: number[][], b: V): V {
 
 test("the engine and pod are rigid bodies and their lattices carry no strain through the whole hop", async (t) => {
   const core = await loadCore();
-  const hop = prepareHop(HOPPER);
+  const hop = prepareHop(HOPPER, { sleeping: false });
   const craft = hop.flight.loaded.craft;
   const world = new World(core);
   assert.equal(world.apply(hop.flight.setup).rejected, 0);

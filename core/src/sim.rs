@@ -240,6 +240,12 @@ pub fn state_hash(world: &World) -> u64 {
         for &n in &sl.near {
             mix(&mut h, n as u64);
         }
+        mix(&mut h, sl.pushed.len() as u64);
+        for f in &sl.pushed {
+            mix_real(&mut h, f.x);
+            mix_real(&mut h, f.y);
+            mix_real(&mut h, f.z);
+        }
     }
     // Which segments a moving joint triggered in the last step, only once a joint exists.
     if world.joint_count() > 0 {

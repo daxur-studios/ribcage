@@ -16,7 +16,7 @@ use beam_core::sleep::{SwitchCheck, MIN_LIVE_STEPS, QUIET_STEPS, WAKE_NEIGHBOUR,
 use beam_core::world::World;
 
 /// State hash of the sleep scene after 200 steps. `test/wasm.test.ts` holds the same number.
-pub const SLEEP_SCENE_200: u64 = 0x8fb3_e3c3_2250_148b;
+pub const SLEEP_SCENE_200: u64 = 0x5b2f_aa52_304d_f2bb;
 
 const STEPS: u32 = 200;
 /// The thrust is cut before this step.

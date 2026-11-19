@@ -14,7 +14,8 @@ const WASM_PATH = new URL("../target/wasm32-unknown-unknown/release/beam_core.wa
 const HOPPER = readFileSync(new URL("./fixtures/hopper.craft.json", import.meta.url), "utf8");
 const HOP_HASH = 0xd92f2aad01c0e048n;
 /** The hop with the engine and pod rigid (plan 005, phase 5.4): `hard-landing-rigid.rcrd`. */
-const RIGID_HOP_HASH = 0x5a1c383b76d89ea6n;
+/** Re-recorded with sleeping on, the flight default from plan 005, phase 5.9 (was 0x5a1c383b76d89ea6 sleeping off). */
+const RIGID_HOP_HASH = 0xa08c8113b3a581c7n;
 
 async function loadCore(): Promise<Core> {
   return Core.load(new Uint8Array(readFileSync(WASM_PATH)));
